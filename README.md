@@ -965,9 +965,9 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 
 ### Test Scenarios
 
-Each scenario maps to the test directory that owns it. Some scenarios touch multiple phases but are assigned to their **primary concern**.
+Tests are split between packages. Validation package tests run without DB connections; core package tests need executors/providers.
 
-#### `tests/init/` — init-time errors (ConfigError, ConnectionError, ProviderError)
+#### `packages/validation/tests/config/` — config validation (ConfigError)
 
 | # | Scenario | Input | Error |
 |---|---|---|---|
@@ -978,12 +978,8 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 80 | Multiple config errors | invalid apiName + duplicate + broken reference | ConfigError: CONFIG_INVALID, errors[] contains all 3 |
 | 81 | Invalid sync reference | ExternalSync references non-existent table/database | ConfigError: CONFIG_INVALID (INVALID_SYNC) |
 | 89 | Invalid cache config | CacheMeta references non-existent table or invalid keyPattern placeholder | ConfigError: CONFIG_INVALID (INVALID_CACHE) |
-| 53 | Connection failed | executor ping fails at init | ConnectionError: CONNECTION_FAILED |
-| 54 | Metadata provider fails | MetadataProvider.load() throws | ProviderError: METADATA_LOAD_FAILED |
-| 55 | Role provider fails | RoleProvider.load() throws | ProviderError: ROLE_LOAD_FAILED |
-| 63 | Lazy connections | validateConnections: false | init succeeds, healthCheck detects issues |
 
-#### `tests/validation/` — input validation against metadata + roles
+#### `packages/validation/tests/query/` — query validation against metadata + roles (ValidationError)
 
 | # | Scenario | Input | Rule |
 |---|---|---|---|
@@ -1007,7 +1003,16 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 87 | Duplicate aggregation alias | orders SUM(total) as x, COUNT(*) as x | rule 14 — INVALID_AGGREGATION |
 | 88 | Alias collides with column apiName | orders columns: [status], SUM(total) as status | rule 14 — INVALID_AGGREGATION |
 
-#### `tests/access/` — role-based column trimming, masking, scope logic
+#### `packages/core/tests/init/` — init-time errors (ConnectionError, ProviderError)
+
+| # | Scenario | Input | Error |
+|---|---|---|---|
+| 53 | Connection failed | executor ping fails at init | ConnectionError: CONNECTION_FAILED |
+| 54 | Metadata provider fails | MetadataProvider.load() throws | ProviderError: METADATA_LOAD_FAILED |
+| 55 | Role provider fails | RoleProvider.load() throws | ProviderError: ROLE_LOAD_FAILED |
+| 63 | Lazy connections | validateConnections: false | init succeeds, healthCheck detects issues |
+
+#### `packages/core/tests/access/` — role-based column trimming, masking, scope logic
 
 | # | Scenario | Input | Focus |
 |---|---|---|---|
@@ -1020,7 +1025,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 16 | Column trimming on byIds | users byIds + limited columns in role | only intersected columns |
 | 38 | Columns omitted | orders (no columns specified, tenant-user) | returns only role-allowed columns |
 
-#### `tests/planner/` — strategy selection (P0–P4)
+#### `packages/core/tests/planner/` — strategy selection (P0–P4)
 
 | # | Scenario | Tables | Strategy |
 |---|---|---|---|
@@ -1044,7 +1049,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 64 | Multi-table join (3 tables) | orders + products + users (all pg-main) | direct → pg-main, 2 JOINs |
 | 79 | Single Iceberg table query | ordersArchive | direct via trino executor (Trino dialect, single catalog) |
 
-#### `tests/generator/` — SQL generation per dialect
+#### `packages/core/tests/generator/` — SQL generation per dialect
 
 | # | Scenario | Input | SQL Feature |
 |---|---|---|---|
@@ -1075,13 +1080,13 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 84 | `columns: undefined` + aggregations | orders columns: undefined, GROUP BY status, SUM(total) | groupBy columns only (not all) |
 | 85 | Join with `columns: []` | orders JOIN products (columns: []), GROUP BY products.category | join for groupBy only, no product columns in SELECT |
 
-#### `tests/cache/` — cache strategy + masking on cached data
+#### `packages/core/tests/cache/` — cache strategy + masking on cached data
 
 | # | Scenario | Input | Focus |
 |---|---|---|---|
 | 35 | Masking on cached results | users byIds=[1,2] (tenant-user) | cache → redis, email still masked |
 
-#### `tests/e2e/` — full pipeline integration
+#### `packages/core/tests/e2e/` — full pipeline integration
 
 | # | Scenario | Input | Focus |
 |---|---|---|---|
@@ -1359,18 +1364,23 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   ├── validation/                  # @mkven/multi-db-validation
 │   │   ├── package.json
 │   │   ├── tsconfig.json
-│   │   └── src/
-│   │       ├── index.ts             # public API: validateQuery, validateConfig, validateApiName + re-exports
-│   │       ├── errors.ts            # MultiDbError hierarchy (ConfigError, ValidationError, etc.)
-│   │       ├── types/
-│   │       │   ├── metadata.ts      # DatabaseMeta, TableMeta, ColumnMeta, RelationMeta, ExternalSync, CacheMeta, RoleMeta
-│   │       │   ├── query.ts         # QueryDefinition, QueryFilter, QueryJoin, QueryAggregation, etc.
-│   │       │   ├── result.ts        # QueryResult, QueryResultMeta, DebugLogEntry
-│   │       │   └── context.ts       # ExecutionContext
-│   │       └── validation/
-│   │           ├── configValidator.ts   # validateConfig — apiName format, uniqueness, references, relations, syncs, caches
-│   │           ├── queryValidator.ts    # validateQuery — rules 1–14 against metadata + roles
-│   │           └── rules.ts             # per-rule validation logic (table, column, filter, join, etc.)
+│   │   ├── src/
+│   │   │   ├── index.ts             # public API: validateQuery, validateConfig, validateApiName + re-exports
+│   │   │   ├── errors.ts            # MultiDbError hierarchy (ConfigError, ValidationError, etc.)
+│   │   │   ├── types/
+│   │   │   │   ├── metadata.ts      # DatabaseMeta, TableMeta, ColumnMeta, RelationMeta, ExternalSync, CacheMeta, RoleMeta
+│   │   │   │   ├── query.ts         # QueryDefinition, QueryFilter, QueryJoin, QueryAggregation, etc.
+│   │   │   │   ├── result.ts        # QueryResult, QueryResultMeta, DebugLogEntry
+│   │   │   │   └── context.ts       # ExecutionContext
+│   │   │   └── validation/
+│   │   │       ├── configValidator.ts   # validateConfig — apiName format, uniqueness, references, relations, syncs, caches
+│   │   │       ├── queryValidator.ts    # validateQuery — rules 1–14 against metadata + roles
+│   │   │       └── rules.ts             # per-rule validation logic (table, column, filter, join, etc.)
+│   │   └── tests/
+│   │       ├── fixtures/
+│   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
+│   │       ├── config/              # scenarios 49–52, 80, 81, 89
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1400,6 +1410,15 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       │   └── fragments.ts     # reusable SQL building blocks
 │   │       └── debug/
 │   │           └── logger.ts        # DebugLogger — collects entries per query
+│   │   └── tests/
+│   │       ├── fixtures/
+│   │       │   └── testConfig.ts     # shared test config (reuses validation fixtures + adds executors)
+│   │       ├── init/                # scenarios 53, 54, 55, 63
+│   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38
+│   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79
+│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85
+│   │       ├── cache/               # scenario 35
+│   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76
 │   │
 │   ├── executor-postgres/           # @mkven/multi-db-executor-postgres
 │   │   ├── package.json
@@ -1420,17 +1439,6 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │       ├── package.json
 │       └── src/
 │           └── index.ts
-│
-└── tests/
-    ├── fixtures/
-    │   └── testConfig.ts            # the full test config described above
-    ├── init/
-    ├── validation/
-    ├── access/
-    ├── planner/
-    ├── generator/
-    ├── cache/
-    └── e2e/
 ```
 
 ---
