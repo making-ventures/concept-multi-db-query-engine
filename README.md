@@ -5,7 +5,7 @@
 Build a reusable, metadata-driven query engine that lets applications query, filter, join, and aggregate data across Postgres, ClickHouse, Iceberg, and Redis through a single typed API. The engine:
 
 - Accepts queries using **apiNames** (decoupled from physical schema)
-- Supports **rich filtering** — 31 operators (comparison, pattern, range, fuzzy, array), column-vs-column comparisons, recursive AND/OR groups, EXISTS/NOT EXISTS subqueries with optional counted variant
+- Supports **rich filtering** — 31 operators (comparison, pattern, range, fuzzy, array), column-vs-column comparisons, recursive AND/OR/NOT groups, EXISTS/NOT EXISTS subqueries with optional counted variant and nesting
 - Supports **JOINs** (inner/left) resolved from relation metadata, **GROUP BY**, and **aggregations** (count, sum, avg, min, max) with HAVING
 - Automatically selects the **optimal execution strategy** — direct DB, cached, materialized replica, or Trino cross-DB federation
 - Enforces **scoped access control** — user roles and service roles intersected to determine effective permissions
@@ -2003,3 +2003,7 @@ This ensures both implementations behave identically — same results, same erro
 - [ ] Nested/grouped results for one-to-many joins? (requires two-query approach: fetch parent IDs with limit, then fetch all children — significant complexity)
 - [ ] OpenTelemetry integration — spans per pipeline phase, traces + metrics
 - [ ] Concurrent reload ordering — snapshot isolation is chosen (see Design Decisions), but what happens when two `reloadMetadata()` calls overlap? Does the second reload see the first's changes? Should reloads be serialized internally?
+- [ ] Automatic tenant filtering via `ExecutionContext.tenantId`? — auto-inject `WHERE tenant_id = ?` without callers adding explicit filter; needs metadata annotation for which column is the tenant column per table
+- [ ] Window functions (ROW_NUMBER, RANK, DENSE_RANK, LAG, LEAD) — useful for analytics; ClickHouse + Trino syntax differs from Postgres
+- [ ] Batch queries — accept multiple `QueryDefinition` objects in a single call, return results in order; useful for dashboards
+- [ ] Computed/virtual columns — derived expressions (e.g. `total * quantity`) defined in metadata, projected as regular columns
