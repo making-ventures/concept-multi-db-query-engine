@@ -355,6 +355,7 @@ interface QueryDefinition {
   groupBy?: QueryGroupBy[]            // columns to group by
   aggregations?: QueryAggregation[]   // aggregate functions
   having?: QueryFilter[]              // filters on aggregated values (applied after GROUP BY)
+                                      // column references aggregation aliases, not table columns
   limit?: number
   offset?: number
   orderBy?: QueryOrderBy[]
@@ -365,8 +366,8 @@ interface QueryDefinition {
 }
 
 interface QueryAggregation {
-  column: string                      // apiName of column to aggregate
-  table?: string                      // apiName of table; omit for `from` table
+  column: string | '*'                // apiName of column, or '*' for count(*)
+  table?: string                      // apiName of table; omit for `from` table (ignored when column is '*')
   fn: 'count' | 'sum' | 'avg' | 'min' | 'max'
   alias: string                       // result column name
 }
@@ -416,6 +417,7 @@ Two distinct return types depending on `executeMode`:
 ```ts
 // When executeMode = 'sql-only'
 interface SqlResult {
+  kind: 'sql'                        // discriminant for union
   sql: string                        // generated SQL
   params: unknown[]                  // bound parameters
   meta: QueryResultMeta
@@ -424,6 +426,7 @@ interface SqlResult {
 
 // When executeMode = 'execute' (default)
 interface DataResult<T = unknown> {
+  kind: 'data'                       // discriminant for union
   data: T[]                          // actual query results (masked if applicable)
   meta: QueryResultMeta
   debugLog?: DebugLogEntry[]          // present only if debug: true
@@ -431,6 +434,7 @@ interface DataResult<T = unknown> {
 
 // When executeMode = 'count'
 interface CountResult {
+  kind: 'count'                      // discriminant for union
   count: number                      // total matching rows
   meta: QueryResultMeta
   debugLog?: DebugLogEntry[]          // present only if debug: true
@@ -587,7 +591,9 @@ interface ColumnMapping {
   apiName: string                     // 'total'
   tableAlias: string                  // 't0'
   masked: boolean                     // apply masking after fetch
-  type: string                        // column type (for masking function selection)
+  type: string                        // logical column type
+  maskingFn?: 'email' | 'phone' | 'name' | 'uuid' | 'number' | 'date' | 'full'
+                                      // which masking function to apply (from ColumnMeta)
 }
 ```
 
@@ -662,8 +668,8 @@ No external SQL generation packages are used — the query shape is predictable 
 [validation]  Column 'total' → valid (type: decimal)
 [validation]  Column 'internalNote' → DENIED for role 'tenant-user' (not in allowedColumns)
 [access-control] Trimming columns to allowed set: [id, total, status, createdAt]
-[access-control] Masking column 'customerEmail' for roles [tenant-user]
-[planning]    Tables needed: [orders(pg-main), customers(pg-main)]
+[access-control] Masking column 'total' for roles [tenant-user]
+[planning]    Tables needed: [orders(pg-main), users(pg-main)]
 [planning]    All tables in 'pg-main' → strategy: DIRECT
 [name-res]    orders.total → public.orders.total_amount
 [name-res]    orders.tenantId → public.orders.tenant_id
@@ -757,7 +763,7 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 12 | Freshness=hours, has materialized | orders + events (hours ok) | materialized → ch-analytics |
 | 13 | Admin role | any table | all columns visible |
 | 14 | Tenant-user role | orders | subset columns only |
-| 14b | Column masking | orders (tenant-user) | customerEmail masked |
+| 14b | Column masking | orders (tenant-user) | total masked |
 | 14c | Multi-role within scope | orders (tenant-user + regional-manager) | union within user scope (all order columns) |
 | 14d | Cross-scope restriction | orders (admin user + orders-service) | restricted to orders-service tables |
 | 14e | Count mode | orders (count) | returns count only |
@@ -843,6 +849,7 @@ const tenantsColumns: ColumnMeta[] = [
 const invoicesColumns: ColumnMeta[] = [
   { apiName: 'id',        physicalName: 'id',          type: 'uuid',      nullable: false },
   { apiName: 'tenantId',  physicalName: 'tenant_id',   type: 'uuid',      nullable: false },
+  { apiName: 'orderId',   physicalName: 'order_id',    type: 'uuid',      nullable: true },
   { apiName: 'amount',    physicalName: 'amount',      type: 'decimal',   nullable: false, maskingFn: 'number' },
   { apiName: 'status',    physicalName: 'status',      type: 'string',    nullable: false },
   { apiName: 'issuedAt',  physicalName: 'issued_at',   type: 'timestamp', nullable: false },
@@ -883,6 +890,11 @@ const ordersRelations: RelationMeta[] = [
   { column: 'customerId', references: { table: 'users', column: 'id' }, type: 'many-to-one' },
   { column: 'productId',  references: { table: 'products', column: 'id' }, type: 'many-to-one' },
   { column: 'tenantId',   references: { table: 'tenants', column: 'id' }, type: 'many-to-one' },
+]
+
+const invoicesRelations: RelationMeta[] = [
+  { column: 'tenantId', references: { table: 'tenants', column: 'id' }, type: 'many-to-one' },
+  { column: 'orderId',  references: { table: 'orders', column: 'id' }, type: 'many-to-one' },
 ]
 
 const eventsRelations: RelationMeta[] = [

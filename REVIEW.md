@@ -101,3 +101,49 @@ The init example calls `createMultiDb({...})` but the returned object's type was
 Both sections mentioned strategy selection, access control, name mapping, debug logging, and execution modes.
 
 **Resolution:** Merged into a single "Objective" section. The Overview was redundant — the architecture diagram already covers "how".
+
+---
+
+## Round 2
+
+### 15. Debug log references nonexistent `customers` table
+
+Example showed `[planning] Tables needed: [orders(pg-main), customers(pg-main)]`. No `customers` table exists in metadata.
+
+**Resolution:** Changed to `users(pg-main)`. Also fixed masking reference from `customerEmail` to `total` (which is the column actually masked for tenant-user on orders).
+
+### 16. Test scenario 14b incorrect
+
+Said "customerEmail masked" for tenant-user on orders. But `customerEmail` isn't a column on orders; tenant-user's orders config masks `total`.
+
+**Resolution:** Changed to "total masked".
+
+### 17. Test scenario #4 missing join path
+
+"orders + invoices → trino cross-db" requires a relation between the tables, but none existed.
+
+**Resolution:** Added `orderId` column to invoices table + `invoices → orders` relation. Also added `invoices → tenants` relation.
+
+### 18. `ColumnMapping` carries `type` but needs `maskingFn`
+
+When `masked: true`, post-processing needs to know which masking function to apply. `type` alone can't determine this.
+
+**Resolution:** Added `maskingFn` field to `ColumnMapping`, sourced from `ColumnMeta`.
+
+### 19. `QueryResult` union lacks discriminant tag
+
+`SqlResult | DataResult | CountResult` are structurally distinguishable but lack a proper discriminant.
+
+**Resolution:** Added `kind: 'sql' | 'data' | 'count'` to each result type — idiomatic TypeScript discriminated union.
+
+### 20. `count(*)` not expressible in `QueryAggregation`
+
+`QueryAggregation.column` was `string` (required), but `COUNT(*)` doesn't reference a specific column.
+
+**Resolution:** Changed to `column: string | '*'`. When `'*'`, `table` is ignored.
+
+### 21. `having` column references aggregation aliases
+
+`having?: QueryFilter[]` reuses `QueryFilter` where `column` means apiName. In HAVING context, `column` refers to `QueryAggregation.alias`, not a table column.
+
+**Resolution:** Added inline comment documenting this semantic difference.
