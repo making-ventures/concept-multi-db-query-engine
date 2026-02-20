@@ -317,6 +317,7 @@ import { createPostgresExecutor } from '@mkven/multi-db-executor-postgres'
 import { createClickHouseExecutor } from '@mkven/multi-db-executor-clickhouse'
 import { createTrinoExecutor } from '@mkven/multi-db-executor-trino'
 import { createRedisCache } from '@mkven/multi-db-cache-redis'
+```
 
 ```ts
 interface CreateMultiDbOptions {
@@ -794,6 +795,12 @@ interface AggregationClause {
 }
 ```
 
+```ts
+interface SqlDialect {
+  generate(parts: SqlParts): { sql: string; params: unknown[] }
+}
+```
+
 Each `SqlDialect` takes a `SqlParts` and produces `{ sql: string, params: unknown[] }`. The dialect resolves each `ColumnRef` with its own quoting rules:
 - Postgres: `t0."created_at"`
 - ClickHouse: `` t0.`created_at` ``
@@ -1161,6 +1168,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │   ├── tsconfig.json
 │   │   └── src/
 │   │       ├── index.ts             # public API
+│   │       ├── errors.ts            # MultiDbError hierarchy (ConfigError, ConnectionError, etc.)
 │   │       ├── types/
 │   │       │   ├── metadata.ts      # DatabaseMeta, TableMeta, ColumnMeta, etc.
 │   │       │   ├── query.ts         # QueryDefinition, QueryFilter, QueryJoin, QueryAggregation
