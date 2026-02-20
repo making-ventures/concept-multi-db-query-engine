@@ -437,7 +437,7 @@ interface QueryDefinition {
   from: string                        // table apiName
   columns?: string[]                  // apiNames; undefined = all allowed for role
   distinct?: boolean                  // SELECT DISTINCT (default: false)
-  filters?: (QueryFilter | QueryFilterGroup)[]  // implicit AND at top level; use QueryFilterGroup for OR / nested logic
+  filters?: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // implicit AND at top level; use QueryFilterGroup for OR / nested logic
   joins?: QueryJoin[]
   groupBy?: QueryGroupBy[]            // columns to group by
   aggregations?: QueryAggregation[]   // aggregate functions
@@ -474,7 +474,7 @@ interface QueryJoin {
   table: string                       // related table apiName
   type?: 'inner' | 'left'            // default: 'left' (safe for nullable FKs)
   columns?: string[]                  // columns to select from joined table
-  filters?: (QueryFilter | QueryFilterGroup)[]  // filters on joined table
+  filters?: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // filters on joined table
 }
 
 interface QueryFilter {
@@ -485,7 +485,13 @@ interface QueryFilter {
 
 interface QueryFilterGroup {
   logic: 'and' | 'or'
-  conditions: (QueryFilter | QueryFilterGroup)[]  // recursive — supports arbitrary nesting
+  conditions: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // recursive — supports arbitrary nesting
+}
+
+interface QueryExistsFilter {
+  exists: boolean                     // true = EXISTS, false = NOT EXISTS
+  table: string                       // related table apiName (relation resolved via metadata, same as joins)
+  filters?: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // optional conditions on the related table
 }
 ```
 
@@ -613,13 +619,14 @@ Given a query touching tables T1, T2, ... Tn:
 2. **Column existence** — only columns defined in table metadata can be referenced
 3. **Role permission** — if a table is not in the role's `tables` list → access denied
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
-5. **Filter validity** — filter operators must be valid for the column type; filter groups are validated recursively (all nested conditions checked)
+5. **Filter validity** — filter operators must be valid for the column type; filter groups and exists filters are validated recursively (all nested conditions checked)
 6. **Join validity** — joined tables must have a defined relation in metadata
 7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database
 8. **Having validity** — `having` filters must reference aliases defined in `aggregations`
 9. **Order By validity** — `orderBy` must reference columns from `from` table or joined tables
 10. **ByIds validity** — `byIds` requires a single-column primary key; cannot combine with `groupBy` or `aggregations`
 11. **Limit/Offset validity** — `limit` and `offset` must be non-negative integers when provided
+12. **Exists filter validity** — `QueryExistsFilter.table` must have a defined relation to the `from` table (or a joining table); role must allow access to the related table
 
 All validation errors are **collected, not thrown one at a time**. The system runs all applicable checks and throws a single `ValidationError` containing every issue found. This lets callers fix all problems at once instead of playing whack-a-mole.
 
@@ -647,7 +654,7 @@ class ConnectionError extends MultiDbError {
 class ValidationError extends MultiDbError {
   code: 'VALIDATION_FAILED'           // always this code — individual issues are in `errors`
   errors: {
-    code: 'UNKNOWN_TABLE' | 'UNKNOWN_COLUMN' | 'ACCESS_DENIED' | 'INVALID_FILTER' | 'INVALID_JOIN' | 'INVALID_GROUP_BY' | 'INVALID_HAVING' | 'INVALID_ORDER_BY' | 'INVALID_BY_IDS' | 'INVALID_LIMIT'
+    code: 'UNKNOWN_TABLE' | 'UNKNOWN_COLUMN' | 'ACCESS_DENIED' | 'INVALID_FILTER' | 'INVALID_JOIN' | 'INVALID_GROUP_BY' | 'INVALID_HAVING' | 'INVALID_ORDER_BY' | 'INVALID_BY_IDS' | 'INVALID_LIMIT' | 'INVALID_EXISTS'
     message: string
     details: { expected?: string; actual?: string; table?: string; column?: string; role?: string }
   }[]
@@ -769,11 +776,20 @@ interface SqlParts {
 }
 
 // Recursive WHERE tree — mirrors QueryFilterGroup at the physical level
-type WhereNode = WhereCondition | WhereGroup
+type WhereNode = WhereCondition | WhereGroup | WhereExists
 
 interface WhereGroup {
   logic: 'and' | 'or'
   conditions: WhereNode[]
+}
+
+interface WhereExists {
+  exists: boolean                     // true = EXISTS, false = NOT EXISTS
+  subquery: {
+    from: TableRef
+    join: { leftColumn: ColumnRef; rightColumn: ColumnRef }  // correlated condition (outer.fk = inner.pk)
+    where?: WhereNode                 // additional conditions inside the subquery
+  }
 }
 
 interface OrderByClause {
@@ -942,6 +958,9 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 22 | HAVING clause | orders GROUP BY status HAVING SUM(total) > 100 | correct HAVING per dialect |
 | 23 | DISTINCT query | orders DISTINCT status | correct SELECT DISTINCT per dialect |
 | 24 | Cross-table ORDER BY | orders + products ORDER BY products.category | correct qualified ORDER BY |
+| 25 | EXISTS filter | orders WHERE EXISTS invoices(status='paid') | correct EXISTS subquery per dialect |
+| 26 | NOT EXISTS filter | users WHERE NOT EXISTS orders | correct NOT EXISTS subquery per dialect |
+| 27 | Nested EXISTS + filter group | orders WHERE (status='active' OR EXISTS invoices) | EXISTS inside OR group |
 
 ### Sample Column Definitions (orders table)
 
@@ -1149,6 +1168,7 @@ const roles: RoleMeta[] = [
 | Validation | Strict — only metadata-defined entities | Fail fast with clear errors |
 | Join results | Flat denormalized rows (no nesting) | `limit` applies to DB rows; with one-to-many joins, `limit: 10` may yield fewer than 10 parent entities. Nesting would require a two-query approach (fetch parent IDs first, then children), breaking the single-query model. Callers can group results using `meta.columns[].fromTable` |
 | Filter logic | Recursive `QueryFilterGroup` with `and`/`or` | Top-level filters array is implicit AND; use `QueryFilterGroup` for OR or nested combinations. Mirrors to `WhereGroup` in `SqlParts` IR. Simple queries stay simple, complex logic is opt-in |
+| Exists filters | `QueryExistsFilter` with correlated subquery | Leverages existing relation metadata for `EXISTS`/`NOT EXISTS`. No implicit JOIN — keeps result set clean. Access control applied to the related table. Mirrors to `WhereExists` in `SqlParts` IR |
 | Imports | Absolute paths, no `../` | Clean, refactor-friendly |
 
 ---
