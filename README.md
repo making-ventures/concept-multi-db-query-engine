@@ -478,7 +478,7 @@ interface QueryJoin {
 }
 
 interface QueryFilter {
-  column: string                      // apiName
+  column: string                      // apiName (or aggregation alias when used in `having`)
   operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'is_null' | 'is_not_null'
   value?: unknown                     // scalar for most operators; array for 'in'/'not_in'; omit for 'is_null'/'is_not_null'
 }
@@ -766,9 +766,9 @@ interface SqlParts {
   distinct?: boolean                  // SELECT DISTINCT
   from: TableRef
   joins: JoinClause[]
-  where: WhereNode                    // recursive AND/OR tree
+  where?: WhereNode                   // recursive AND/OR tree (omit if no WHERE clause)
   groupBy: ColumnRef[]
-  having: WhereNode                   // recursive AND/OR tree for HAVING
+  having?: WhereNode                  // recursive AND/OR tree for HAVING (omit if no HAVING clause)
   aggregations: AggregationClause[]
   orderBy: OrderByClause[]
   limit?: number
@@ -934,7 +934,7 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 3 | Cross-PG, debezium available | orders + tenants | materialized → pg-main (tenants replicated) |
 | 4 | Cross-PG, no debezium | orders + invoices | trino cross-db |
 | 5 | PG + CH, debezium available | orders + events | materialized → ch-analytics (orders replicated) |
-| 6 | PG + CH, no debezium | products + events | trino cross-db |
+| 6 | PG + CH, no debezium | users + events | trino cross-db |
 | 7 | PG + Iceberg | orders + ordersArchive | trino or materialized |
 | 8 | By-ID with cache hit | users byIds=[1,2,3] | cache → redis |
 | 9 | By-ID cache miss | orders byIds=[1,2] | direct → pg-main |
@@ -1012,6 +1012,7 @@ const eventsColumns: ColumnMeta[] = [
   { apiName: 'id',        physicalName: 'id',          type: 'uuid',      nullable: false },
   { apiName: 'type',      physicalName: 'event_type',  type: 'string',    nullable: false },
   { apiName: 'userId',    physicalName: 'user_id',     type: 'uuid',      nullable: false },
+  { apiName: 'orderId',   physicalName: 'order_id',    type: 'uuid',      nullable: true },
   { apiName: 'payload',   physicalName: 'payload',     type: 'string',    nullable: true,  maskingFn: 'full' },
   { apiName: 'timestamp', physicalName: 'event_ts',    type: 'timestamp', nullable: false },
 ]
@@ -1091,7 +1092,13 @@ const productsRelations: RelationMeta[] = [
 ]
 
 const eventsRelations: RelationMeta[] = [
-  { column: 'userId', references: { table: 'users', column: 'id' }, type: 'many-to-one' },
+  { column: 'userId',  references: { table: 'users', column: 'id' }, type: 'many-to-one' },
+  { column: 'orderId', references: { table: 'orders', column: 'id' }, type: 'many-to-one' },
+]
+
+const ordersArchiveRelations: RelationMeta[] = [
+  { column: 'customerId', references: { table: 'users', column: 'id' }, type: 'many-to-one' },
+  { column: 'tenantId',   references: { table: 'tenants', column: 'id' }, type: 'many-to-one' },
 ]
 ```
 
