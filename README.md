@@ -469,7 +469,7 @@ type QueryResult<T = unknown> = SqlResult | DataResult<T> | CountResult
 interface QueryResultMeta {
   strategy: 'direct' | 'cache' | 'materialized' | 'trino-cross-db'
   targetDatabase: string             // which DB was queried
-  dialect: DatabaseEngine | 'trino'
+  dialect: 'postgres' | 'clickhouse' | 'trino'  // iceberg is always queried via trino
   tablesUsed: {
     tableId: string
     source: 'original' | 'materialized' | 'cache'
@@ -665,6 +665,7 @@ interface WhereCondition {
   column: ColumnRef
   operator: string                    // '=', 'ILIKE', 'ANY', etc. — string (not union) because dialects may emit operators beyond the public QueryFilter set
   paramIndex?: number                 // for parameterized values
+  paramIndexEnd?: number              // second param index, used for BETWEEN (decomposed from QueryFilter 'between')
   literal?: string                    // for IS NULL, IS NOT NULL
 }
 
@@ -760,7 +761,7 @@ For cross-database scenario:
 | Role | Scope Usage | Access |
 |---|---|---|
 | `admin` | user | All tables, all columns |
-| `tenant-user` | user | orders + users + products, subset columns, email masked |
+| `tenant-user` | user | orders + users + products, subset columns, total + email masked |
 | `regional-manager` | user | orders + users + products (all cols, phone+email masked) |
 | `analytics-reader` | user | events + metrics + ordersArchive only |
 | `no-access` | user | No tables (edge case) |
@@ -800,6 +801,9 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 20 | Aggregation query | orders GROUP BY status, SUM(total) | correct SQL per dialect |
 | 21 | Aggregation + join | orders + products GROUP BY category | correct cross-table aggregation |
 | 22 | HAVING clause | orders GROUP BY status HAVING SUM(total) > 100 | correct HAVING per dialect |
+| 23 | DISTINCT query | orders DISTINCT status | correct SELECT DISTINCT per dialect |
+| 24 | BETWEEN filter | orders WHERE total BETWEEN 100 AND 500 | correct BETWEEN with two params |
+| 25 | Cross-table ORDER BY | orders + products ORDER BY products.category | correct qualified ORDER BY |
 
 ### Sample Column Definitions (orders table)
 
@@ -919,6 +923,14 @@ const ordersRelations: RelationMeta[] = [
 const invoicesRelations: RelationMeta[] = [
   { column: 'tenantId', references: { table: 'tenants', column: 'id' }, type: 'many-to-one' },
   { column: 'orderId',  references: { table: 'orders', column: 'id' }, type: 'many-to-one' },
+]
+
+const usersRelations: RelationMeta[] = [
+  { column: 'tenantId', references: { table: 'tenants', column: 'id' }, type: 'many-to-one' },
+]
+
+const productsRelations: RelationMeta[] = [
+  { column: 'tenantId', references: { table: 'tenants', column: 'id' }, type: 'many-to-one' },
 ]
 
 const eventsRelations: RelationMeta[] = [
