@@ -436,7 +436,7 @@ const countResult = await multiDb.query({
 ```ts
 interface QueryDefinition {
   from: string                        // table apiName
-  columns?: string[]                  // apiNames; undefined = all allowed for role
+  columns?: string[]                  // apiNames; undefined = all allowed for role; empty array [] is rejected (use undefined for all)
   distinct?: boolean                  // SELECT DISTINCT (default: false)
   filters?: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // implicit AND at top level; use QueryFilterGroup for OR / nested logic
   joins?: QueryJoin[]
@@ -554,12 +554,12 @@ interface QueryResultMeta {
     physicalName: string
   }[]
   columns: {
-    apiName: string
-    type: string
+    apiName: string                  // for aggregations: the alias (e.g. 'totalSum')
+    type: string                     // for aggregations: inferred from fn (count → 'int', sum/avg/min/max → source column type)
     nullable: boolean
-    fromTable: string                // table apiName this column came from
-    masked: boolean                  // whether this column was masked
-  }[]
+    fromTable: string                // table apiName; for aggregations: the source column's table (or `from` table for count(*))
+    masked: boolean                  // whether this column was masked (always false for aggregation aliases)
+  }[]                                // in count mode: empty array (no columns are selected)
   timing: {
     planningMs: number
     generationMs: number
@@ -575,7 +575,7 @@ interface DebugLogEntry {
 }
 ```
 
-When you request execution (`executeMode = 'execute'`), you get data back — no SQL. When you request SQL only (`executeMode = 'sql-only'`), you get SQL + params — no execution, no data. When you request count (`executeMode = 'count'`), you get just the row count — `columns`, `orderBy`, `limit`, `offset`, `distinct`, `groupBy`, and `aggregations` are ignored (always emits `SELECT COUNT(*) FROM ...`, never grouped counts). All modes include metadata. Debug log is included only when `debug: true`.
+When you request execution (`executeMode = 'execute'`), you get data back — no SQL. When you request SQL only (`executeMode = 'sql-only'`), you get SQL + params — no execution, no data. When you request count (`executeMode = 'count'`), you get just the row count — `columns`, `orderBy`, `limit`, `offset`, `distinct`, `groupBy`, and `aggregations` are ignored (always emits `SELECT COUNT(*) FROM ...`, never grouped counts); `meta.columns` is an empty array since no columns are selected. All modes include metadata. Debug log is included only when `debug: true`.
 
 In `sql-only` mode, masking cannot be applied (no data to mask). However, `meta.columns[].masked` still reports masking intent so the caller can apply masking themselves after execution.
 
@@ -599,6 +599,7 @@ Given a query touching tables T1, T2, ... Tn:
 ### Priority 1 — Single Database Direct
 - ALL required tables exist in ONE database (original data)
 - Generate native SQL for that engine
+- **Iceberg exception:** Iceberg databases have no standalone executor — they are always queried via the `trino` executor using `trinoCatalog`. A single-Iceberg-table P1 query routes through the Trino executor with Trino dialect (single-catalog, no cross-DB federation)
 - This is always preferred when possible (freshest data, no overhead)
 
 ### Priority 2 — Materialized Replica
@@ -622,7 +623,7 @@ Given a query touching tables T1, T2, ... Tn:
 ## Validation Rules
 
 1. **Table existence** — only tables defined in metadata can be queried
-2. **Column existence** — only columns defined in table metadata can be referenced
+2. **Column existence** — only columns defined in table metadata can be referenced; explicit empty `columns: []` is rejected (use `undefined` for all allowed)
 3. **Role permission** — if a table is not in the role's `tables` list → access denied
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
 5. **Filter validity** — filter operators must be valid for the column type; filter groups and exists filters are validated recursively (all nested conditions checked)
@@ -1023,6 +1024,8 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 75 | `not_like` filter | orders WHERE status NOT LIKE '%cancel%' | correct NOT LIKE per dialect |
 | 76 | Count + groupBy ignored | orders GROUP BY status, SUM(total) (count mode) | groupBy/aggregations ignored, returns scalar count |
 | 77 | Order by aggregation alias | orders GROUP BY status, SUM(total) as totalSum, ORDER BY totalSum | correct ORDER BY alias per dialect |
+| 78 | Empty columns array | orders columns: [] | validation error: UNKNOWN_COLUMN |
+| 79 | Single Iceberg table query | ordersArchive | direct via trino executor (Trino dialect, single catalog) |
 
 ### Test Scenarios by Package
 
@@ -1059,6 +1062,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 43 | Invalid EXISTS filter | rule 12 — INVALID_EXISTS |
 | 46 | Invalid filter operator | rule 5 — INVALID_FILTER |
 | 47 | Access denied on column | rule 4 — ACCESS_DENIED (column) |
+| 78 | Empty columns array | rule 2 — UNKNOWN_COLUMN |
 
 #### `tests/access/` — role-based column trimming, masking, scope logic
 
@@ -1095,6 +1099,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 57 | Freshness unmet | P4 — FRESHNESS_UNMET |
 | 59 | Unreachable tables | P4 — UNREACHABLE_TABLES |
 | 64 | Multi-table join (3 tables) | P1 — direct (all pg-main) |
+| 79 | Single Iceberg table query | P1 via trino executor |
 
 #### `tests/generator/` — SQL generation per dialect
 
