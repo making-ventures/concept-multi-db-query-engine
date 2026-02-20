@@ -479,7 +479,7 @@ interface QueryJoin {
 
 interface QueryFilter {
   column: string                      // apiName (or aggregation alias when used in `having`)
-  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'is_null' | 'is_not_null'
+  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'ilike' | 'not_ilike' | 'is_null' | 'is_not_null'
   value?: unknown                     // scalar for most operators; array for 'in'/'not_in'; omit for 'is_null'/'is_not_null'
 }
 
@@ -510,7 +510,7 @@ Roles within a scope are unioned (accumulated permissions). The final effective 
 
 ### Query Result
 
-Two distinct return types depending on `executeMode`:
+Three distinct return types depending on `executeMode`:
 
 ```ts
 // When executeMode = 'sql-only'
@@ -722,6 +722,7 @@ This decouples the API contract from database schema evolution.
 | Arrays | `= ANY($1)` | `arrayJoin` | `UNNEST` |
 | Date functions | `date_trunc(...)` | `toStartOfDay(...)` | `date_trunc(...)` |
 | LIMIT/OFFSET | `LIMIT n OFFSET m` | `LIMIT n OFFSET m` | `LIMIT n OFFSET m` |
+| Case-insensitive LIKE | `ILIKE` | `ilike(col, pattern)` | `lower(col) LIKE lower(pattern)` |
 | Boolean | `true/false` | `1/0` | `true/false` |
 
 Each engine gets a `SqlDialect` implementation.
@@ -1099,6 +1100,7 @@ const eventsRelations: RelationMeta[] = [
 ]
 
 const ordersArchiveRelations: RelationMeta[] = [
+  { column: 'id',         references: { table: 'orders', column: 'id' }, type: 'one-to-one' },
   { column: 'customerId', references: { table: 'users', column: 'id' }, type: 'many-to-one' },
   { column: 'tenantId',   references: { table: 'tenants', column: 'id' }, type: 'many-to-one' },
 ]
