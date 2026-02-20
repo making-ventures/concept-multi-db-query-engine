@@ -1094,6 +1094,7 @@ const roles: RoleMeta[] = [
 | Cache | Redis synced by Debezium, no TTL | Always fresh, fast by-ID reads |
 | Debug logging | Structured entries per pipeline phase, opt-in via `debug: true` | Zero overhead when not debugging |
 | Validation | Strict — only metadata-defined entities | Fail fast with clear errors |
+| Join results | Flat denormalized rows (no nesting) | `limit` applies to DB rows; with one-to-many joins, `limit: 10` may yield fewer than 10 parent entities. Nesting would require a two-query approach (fetch parent IDs first, then children), breaking the single-query model. Callers can group results using `meta.columns[].fromTable` |
 | Imports | Absolute paths, no `../` | Clean, refactor-friendly |
 
 ---
@@ -1204,3 +1205,4 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 - [ ] RLS (row-level security) — deferred, may add later
 - [ ] Cursor-based pagination as alternative to offset?
 - [ ] Custom masking functions beyond predefined set?
+- [ ] Nested/grouped results for one-to-many joins? (requires two-query approach: fetch parent IDs with limit, then fetch all children — significant complexity)
