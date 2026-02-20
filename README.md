@@ -1075,6 +1075,10 @@ Tests are split between packages. Validation package tests run without DB connec
 | 117 | `contains` on non-string | orders WHERE total contains '100' | rule 5 — INVALID_FILTER (decimal column) |
 | 118 | Column filter type mismatch | orders WHERE total(decimal) > status(string) | rule 5 — INVALID_FILTER (incompatible types) |
 | 119 | Column filter on denied column | orders WHERE internalNote > status (tenant-user) | rule 4 — ACCESS_DENIED (column in filter) |
+| 120 | `between` malformed value | orders WHERE total between { from: 100 } (missing `to`) | rule 5 — INVALID_FILTER (malformed compound value) |
+| 121 | `levenshtein_lte` negative maxDistance | users WHERE lastName levenshtein_lte { text: 'x', maxDistance: -1 } | rule 5 — INVALID_FILTER (maxDistance must be ≥ 0) |
+| 122 | `in` with empty array | orders WHERE status in [] | rule 5 — INVALID_FILTER (empty array produces invalid SQL) |
+| 123 | Column filter non-existent refColumn | orders WHERE total > nonexistent (QueryColumnFilter) | rule 2 — UNKNOWN_COLUMN (refColumn side) |
 
 #### `packages/core/tests/init/` — init-time errors (ConnectionError, ProviderError)
 
@@ -1125,6 +1129,7 @@ Tests are split between packages. Validation package tests run without DB connec
 | 64 | Multi-table join (3 tables) | orders + products + users (all pg-main) | direct → pg-main, 2 JOINs |
 | 79 | Single Iceberg table query | ordersArchive | direct via trino executor (Trino dialect, single catalog) |
 | 103 | Cache column subset → P0 skip | products byIds=[1,2], columns: [id, name, price] but cache only has [id, name, category] | skip cache → direct DB |
+| 130 | byIds + columns subset, cache hit | users byIds=[1,2], columns: [id, email] (all in cache) | cache → redis (requested columns are subset of cached columns) |
 
 #### `packages/core/tests/generator/` — SQL generation per dialect
 
@@ -1172,6 +1177,12 @@ Tests are split between packages. Validation package tests run without DB connec
 | 113 | `starts_with` filter | users WHERE email starts_with 'admin' | `LIKE 'admin%'` |
 | 114 | `istarts_with` filter | users WHERE email istarts_with 'ADMIN' | dialect-specific case-insensitive `LIKE 'ADMIN%'` |
 | 115 | Column-vs-column filter | orders WHERE total > discount (QueryColumnFilter) | `t0."total_amount" > t0."discount"` — no params |
+| 124 | Cross-table column filter | orders JOIN products, orders.total > products.price (QueryColumnFilter) | `t0."total_amount" > t1."price"` — cross-table, no params |
+| 125 | `contains` wildcard escaping | users WHERE email contains 'test%user' | `LIKE '%test\%user%'` — `%` in value auto-escaped |
+| 126 | Aggregation on joined column | orders JOIN products, SUM(products.price) as totalPrice | `SUM(t1."price")` — aggregation references joined table |
+| 127 | 3-table JOIN | orders + products + users (all pg-main) | 2 JOIN clauses in generated SQL |
+| 128 | `between` on timestamp | orders WHERE createdAt between { from: '2024-01-01', to: '2024-12-31' } | `t0."created_at" BETWEEN $1 AND $2` |
+| 129 | AVG aggregation | orders AVG(total) as avgTotal | `SELECT AVG(t0."total_amount") as "avgTotal"` |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 
@@ -1486,7 +1497,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–119
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1521,8 +1532,8 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       │   └── testConfig.ts     # shared test config (reuses validation fixtures + adds executors)
 │   │       ├── init/                # scenarios 53, 54, 55, 63
 │   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106
-│   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103
-│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115
+│   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
+│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129
 │   │       ├── cache/               # scenario 35
 │   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105
 │   │
