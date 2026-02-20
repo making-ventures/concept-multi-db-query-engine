@@ -461,8 +461,8 @@ interface QueryAggregation {
 }
 
 interface QueryOrderBy {
-  column: string                      // apiName
-  table?: string                      // apiName of table; omit for `from` table
+  column: string                      // apiName (or aggregation alias when used with groupBy/aggregations)
+  table?: string                      // apiName of table; omit for `from` table (omit when referencing an alias)
   direction: 'asc' | 'desc'
 }
 
@@ -508,7 +508,7 @@ interface ExecutionContext {
 }
 ```
 
-Roles within a scope are unioned (accumulated permissions). The final effective permissions are the intersection of all scope unions. If a scope is omitted, it imposes no restriction (treated as "all access" for that scope).
+Roles within a scope are unioned (accumulated permissions). The final effective permissions are the intersection of all scope unions. If a scope is omitted, it imposes no restriction (treated as "all access" for that scope). An empty array (`user: []`) is different: it means zero roles → zero permissions → all tables denied.
 
 ### Query Result
 
@@ -627,7 +627,7 @@ Given a query touching tables T1, T2, ... Tn:
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
 5. **Filter validity** — filter operators must be valid for the column type; filter groups and exists filters are validated recursively (all nested conditions checked)
 6. **Join validity** — joined tables must have a defined relation in metadata
-7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database
+7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Aggregation aliases must be unique. Prevents invalid SQL from reaching the database
 8. **Having validity** — `having` filters must reference aliases defined in `aggregations`
 9. **Order By validity** — `orderBy` must reference columns from `from` table, joined tables, or aggregation aliases defined in `aggregations`
 10. **ByIds validity** — `byIds` requires a non-empty array and a single-column primary key; cannot combine with `groupBy` or `aggregations`
@@ -964,7 +964,7 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 16 | Column trimming on byIds | users byIds + limited columns in role | only intersected columns |
 | 17 | Invalid table name | nonexistent | validation error |
 | 18 | Invalid column name | orders.nonexistent | validation error |
-| 19 | Trino disabled | cross-db query | error with explanation |
+| 19 | Trino disabled | cross-db query | PlannerError: TRINO_DISABLED |
 | 20 | Aggregation query | orders GROUP BY status, SUM(total) | correct SQL per dialect |
 | 21 | Aggregation + join | orders + products GROUP BY category | correct cross-table aggregation |
 | 22 | HAVING clause | orders GROUP BY status HAVING SUM(total) > 100 | correct HAVING per dialect |
@@ -1089,7 +1089,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 10 | By-ID partial cache | P0 + P1 — cache + direct merge |
 | 11 | Freshness=realtime | skip P2, use P3 |
 | 12 | Freshness=hours | P2 — materialized |
-| 19 | Trino disabled | P4 — error |
+| 19 | Trino disabled | P4 — TRINO_DISABLED |
 | 33 | byIds + filters (cache skip) | P0 skipped → P1 |
 | 56 | No Trino catalog | P4 — NO_CATALOG |
 | 57 | Freshness unmet | P4 — FRESHNESS_UNMET |
