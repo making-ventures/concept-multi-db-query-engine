@@ -2,16 +2,20 @@
 
 ## Objective
 
-Build a reusable, metadata-driven query engine that lets applications query data across Postgres, ClickHouse, Iceberg, and Redis through a single typed API. The engine:
+Build a reusable, metadata-driven query engine that lets applications query, filter, join, and aggregate data across Postgres, ClickHouse, Iceberg, and Redis through a single typed API. The engine:
 
 - Accepts queries using **apiNames** (decoupled from physical schema)
+- Supports **rich filtering** — 26 operators (comparison, pattern, range, fuzzy), column-vs-column comparisons, recursive AND/OR groups, EXISTS/NOT EXISTS subqueries
+- Supports **JOINs** (inner/left) resolved from relation metadata, **GROUP BY**, and **aggregations** (count, sum, avg, min, max) with HAVING
 - Automatically selects the **optimal execution strategy** — direct DB, cached, materialized replica, or Trino cross-DB federation
 - Enforces **scoped access control** — user roles and service roles intersected to determine effective permissions
 - Applies **column masking** for sensitive data based on role
-- Returns either **generated SQL** or **executed results** depending on the caller's needs
+- **Validates strictly** — 14 rules covering tables, columns, filters, joins, aggregations, permissions; all errors collected into a single response
+- Returns **generated SQL**, **executed results**, or **row counts** depending on the caller's needs
 - Provides **structured debug logs** for transparent pipeline tracing
+- Supports **hot-reload** of metadata and roles, **health checks** for all providers, and graceful **shutdown**
 
-The package (`@mkven/multi-db`) is built as a standalone, reusable library with zero I/O dependencies in the core.
+The monorepo ships a standalone **validation package** (`@mkven/multi-db-validation`) with **zero I/O dependencies** — clients can validate configs and queries locally before sending to the server. The core package (`@mkven/multi-db`) depends on it and adds planning, SQL generation, and masking, also with zero I/O deps. Database drivers and cache clients live in separate executor/cache packages.
 
 ## Target Databases
 
@@ -39,7 +43,8 @@ Tables may live in any database. Some tables are replicated between databases vi
 │  1. VALIDATION                      │
 │  - table/column existence           │
 │  - role permissions                 │
-│  - filter operator validity         │
+│  - filter/join/aggregation validity │
+│  - exists/ordering/limit checks     │
 └──────────────┬──────────────────────┘
                │
 ┌──────────────▼──────────────────────┐
