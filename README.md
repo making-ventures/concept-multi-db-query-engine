@@ -346,6 +346,7 @@ const multiDb = await createMultiDb({
   // Keys must match DatabaseMeta.id, except 'trino' which is a special key for the federation layer
   executors: {
     'pg-main': createPostgresExecutor({ connectionString: '...' }),
+    'pg-tenant': createPostgresExecutor({ connectionString: '...' }),
     'ch-analytics': createClickHouseExecutor({ url: '...' }),
     'trino': createTrinoExecutor({ url: '...' }),     // special key — not a DatabaseMeta.id
   },
@@ -446,7 +447,7 @@ interface QueryDefinition {
   limit?: number
   offset?: number
   orderBy?: QueryOrderBy[]
-  freshness?: 'realtime' | 'seconds' | 'minutes' | 'hours'  // acceptable lag
+  freshness?: 'realtime' | 'seconds' | 'minutes' | 'hours'  // acceptable lag; omit = any lag acceptable (planner still prefers original via P1 > P2)
   byIds?: (string | number)[]        // shortcut: fetch by single-column primary key(s)
   executeMode?: 'sql-only' | 'execute' | 'count'  // default: 'execute'
   debug?: boolean                     // include debugLog in result (default: false)
@@ -678,7 +679,7 @@ class ProviderError extends MultiDbError {
 }
 ```
 
-`ConfigError` is thrown at init time (invalid apiNames, duplicate names, broken DB/table/relation references). `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query. `ExecutionError` is thrown during SQL execution or cache access — for `QUERY_FAILED`, the `sql` and `params` that caused the failure are included for debugging. `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails (wraps the original error).
+`ConfigError` is thrown at init time and during `reloadMetadata()` (invalid apiNames, duplicate names, broken DB/table/relation references). `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query. `ExecutionError` is thrown during SQL execution or cache access — for `QUERY_FAILED`, the `sql` and `params` that caused the failure are included for debugging. `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails — at init time or during `reloadMetadata()` / `reloadRoles()` (wraps the original error).
 
 ---
 
@@ -967,6 +968,7 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 27 | Nested EXISTS + filter group | orders WHERE (status='active' OR EXISTS invoices) | EXISTS inside OR group |
 | 28 | OR filter group | orders WHERE (status='active' OR total > 100) | correct OR clause per dialect |
 | 29 | Negated filter group | orders WHERE NOT (status='cancelled' AND total = 0) | correct NOT (...) per dialect |
+| 30 | ILIKE filter | users WHERE email ILIKE '%@example%' | correct case-insensitive LIKE per dialect |
 
 ### Sample Column Definitions (orders table)
 
