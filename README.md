@@ -994,7 +994,7 @@ type HavingNode = WhereCondition | HavingBetween | HavingGroup
 // Range condition on an aggregation alias — uses bare string, not ColumnRef
 interface HavingBetween {
   alias: string                       // aggregation alias (e.g. 'totalSum')
-  not?: boolean                       // when true, emits NOT (alias BETWEEN ... AND ...)
+  not?: boolean                       // when true, negates the range; per-dialect form varies (see SQL Dialect Differences)
   fromParamIndex: number
   toParamIndex: number
 }
@@ -1273,6 +1273,7 @@ Tests are split between packages. Validation package tests run without DB connec
 | 229 | `notIn` on date column | invoices WHERE dueDate notIn ['2024-06-01'] | rule 5 — INVALID_FILTER (`notIn` rejected on `date` type) |
 | 230 | `in` on timestamp column | orders WHERE createdAt IN ('2024-01-01T00:00:00Z') | rule 5 — INVALID_FILTER (`in` rejected on `timestamp` type) |
 | 231 | `between` on uuid column | orders WHERE id BETWEEN 'uuid1' AND 'uuid2' | rule 5 — INVALID_FILTER (`between` rejected on `uuid` — no meaningful ordering) |
+| 232 | `notIn` on boolean column | orders WHERE isPaid NOT IN (true) | rule 5 — INVALID_FILTER (`notIn` rejected on `boolean` type) |
 
 #### `packages/core/tests/init/` — init-time errors (ConnectionError, ProviderError)
 
@@ -1298,6 +1299,7 @@ Tests are split between packages. Validation package tests run without DB connec
 | 95 | Empty scope intersection | events (analytics-reader user + orders-service) | service scope excludes events → ACCESS_DENIED |
 | 104 | Empty roles array | orders (user: []) | zero roles → zero permissions → ACCESS_DENIED |
 | 106 | Cross-scope masking | orders (user: [regional-manager], service: [svc-role w/ maskedColumns: ['total']]) | user scope unmasks total, service scope masks it → stays masked (scope intersection) |
+| 233 | Aggregation alias unmasked | orders (tenant-user): GROUP BY status, SUM(total) as totalSum | totalSum `masked: false` — aggregation aliases never masked even when source column has `maskingFn: 'number'` |
 
 #### `packages/core/tests/planner/` — strategy selection (P0–P4)
 
@@ -1386,7 +1388,7 @@ Tests are split between packages. Validation package tests run without DB connec
 | 156 | byIds + JOIN | orders byIds=[uuid1,uuid2] JOIN products | `SELECT ... FROM orders t0 LEFT JOIN products t1 ON ... WHERE t0."id" = ANY($1)` — cache skipped |
 | 133 | `endsWith` filter | users WHERE email endsWith '@example.com' | PG: `LIKE '%@example.com'`, CH: `endsWith(t0.\`email\`, {p1:String})`, Trino: `LIKE '%@example.com'` |
 | 134 | `iendsWith` filter | users WHERE email iendsWith '@EXAMPLE.COM' | PG: `ILIKE '%@EXAMPLE.COM'`, CH: `ilike(t0.\`email\`, '%@EXAMPLE.COM')`, Trino: `lower(t0."email") LIKE lower('%@EXAMPLE.COM')` |
-| 135 | `notBetween` filter | orders WHERE total NOT BETWEEN 0 AND 10 | `NOT (col BETWEEN $1 AND $2)` per dialect |
+| 135 | `notBetween` filter | orders WHERE total NOT BETWEEN 0 AND 10 | PG: `col NOT BETWEEN $1 AND $2`, CH: `NOT (col BETWEEN {p1} AND {p2})`, Trino: `col NOT BETWEEN ? AND ?` |
 | 136 | `notContains` filter | users WHERE email notContains 'spam' | `NOT LIKE '%spam%'` |
 | 137 | `notIcontains` filter | users WHERE email notIcontains 'SPAM' | dialect-specific case-insensitive `NOT LIKE '%SPAM%'` |
 | 138 | Top-level filter on joined column | orders JOIN products, top-level filter: { column: 'category', table: 'products', operator: '=', value: 'electronics' } | `t1."category" = $1` in WHERE (same as QueryJoin.filters) |
@@ -1403,7 +1405,7 @@ Tests are split between packages. Validation package tests run without DB connec
 | 184 | `arrayIsEmpty` filter | events WHERE tags arrayIsEmpty | PG: `cardinality(t0."tags") = 0`, CH: `empty(t0.\`tags\`)`, Trino: `cardinality(t0."tags") = 0` |
 | 185 | `arrayIsNotEmpty` filter | products WHERE labels arrayIsNotEmpty | PG: `cardinality(t0."labels") > 0`, CH: `notEmpty(...)`, Trino: `cardinality(...) > 0` |
 | 186 | `isNull` on array column | events WHERE tags IS NULL (tags is 'string[]', nullable: true) | `t0."tags" IS NULL` — `isNull`/`isNotNull` valid on array columns (same syntax as scalars) |
-| 188 | `notBetween` in HAVING | orders GROUP BY status, HAVING SUM(total) NOT BETWEEN 0 AND 10 | `NOT ("totalSum" BETWEEN $N AND $N+1)` — uses `HavingBetween` IR with `not: true` |
+| 188 | `notBetween` in HAVING | orders GROUP BY status, HAVING SUM(total) NOT BETWEEN 0 AND 10 | PG: `"totalSum" NOT BETWEEN $N AND $N+1`, CH: `NOT ("totalSum" BETWEEN {pN} AND {pN+1})`, Trino: `"totalSum" NOT BETWEEN ? AND ?` — uses `HavingBetween` IR with `not: true` |
 | 189 | `=` on boolean column | orders WHERE isPaid = true | PG: `t0."is_paid" = $1`, CH: `t0.\`is_paid\` = {p1:Bool}`, Trino: `t0."is_paid" = ?` |
 | 193 | `between` on int column | orders WHERE quantity BETWEEN 1 AND 10 | `t0."quantity" BETWEEN $1 AND $2` — int orderable type, same syntax as decimal |
 | 194 | `in` on int column | orders WHERE quantity IN (1, 5, 10) | PG: `t0."quantity" = ANY($1::integer[])` — int array cast; CH: `IN tuple(...)`, Trino: `IN (?, ?, ?)` |
@@ -1916,7 +1918,7 @@ This ensures both implementations behave identically — same results, same erro
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187, 190–192, 195, 198, 199, 229–231
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187, 190–192, 195, 198, 199, 229–232
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1950,7 +1952,7 @@ This ensures both implementations behave identically — same results, same erro
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (reuses validation fixtures + adds executors)
 │   │       ├── init/                # scenarios 53, 54, 55, 63
-│   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106
+│   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106, 233
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
 │   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155–157, 160–164, 166, 181–186, 188–189, 193, 194, 196, 197, 200–207, 227
 │   │       ├── cache/               # scenario 35
