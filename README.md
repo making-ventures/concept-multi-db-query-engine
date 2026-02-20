@@ -996,6 +996,12 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 55 | Role provider fails | RoleProvider.load() throws | ProviderError: ROLE_LOAD_FAILED |
 | 56 | No Trino catalog | trino enabled, database missing trinoCatalog | PlannerError: NO_CATALOG |
 | 57 | Freshness unmet | realtime required, all paths have lag, no trino catalog | PlannerError: FRESHNESS_UNMET |
+| 58 | Query execution fails | orders (executor throws at runtime) | ExecutionError: QUERY_FAILED (includes sql + params) |
+| 59 | Unreachable tables | metrics + tenants (no replica, no trino catalog for ch-analytics) | PlannerError: UNREACHABLE_TABLES |
+| 60 | Health check | all executors + cache providers | healthCheck() returns per-provider status |
+| 61 | Hot-reload metadata | reloadMetadata() with new table added | next query sees new table |
+| 62 | Reload failure | reloadRoles() with failing provider | ProviderError, old config preserved |
+| 63 | Lazy connections | validateConnections: false | init succeeds, healthCheck detects issues |
 
 ### Test Scenarios by Package
 
@@ -1012,6 +1018,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 53 | Connection failed | ConnectionError: CONNECTION_FAILED |
 | 54 | Metadata provider fails | ProviderError: METADATA_LOAD_FAILED |
 | 55 | Role provider fails | ProviderError: ROLE_LOAD_FAILED |
+| 63 | Lazy connections | init with validateConnections: false |
 
 #### `tests/validation/` — input validation against metadata + roles
 
@@ -1064,6 +1071,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 33 | byIds + filters (cache skip) | P0 skipped → P1 |
 | 56 | No Trino catalog | P4 — NO_CATALOG |
 | 57 | Freshness unmet | P4 — FRESHNESS_UNMET |
+| 59 | Unreachable tables | P4 — UNREACHABLE_TABLES |
 
 #### `tests/generator/` — SQL generation per dialect
 
@@ -1097,6 +1105,10 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 39 | Debug mode | debug: true → debugLog |
 | 44 | Executor missing | EXECUTOR_MISSING at execution |
 | 48 | Cache provider missing | CACHE_PROVIDER_MISSING at execution |
+| 58 | Query execution fails | QUERY_FAILED at execution |
+| 60 | Health check | healthCheck() per-provider status |
+| 61 | Hot-reload metadata | reloadMetadata() + query with new table |
+| 62 | Reload failure | reloadRoles() fails, old config preserved |
 
 ### Sample Column Definitions (orders table)
 
