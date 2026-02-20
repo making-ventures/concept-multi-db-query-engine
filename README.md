@@ -265,7 +265,7 @@ const multiDb = createMultiDb({
     'ch-analytics': createClickHouseExecutor({ url: '...' }),
   },
 
-  // Optional: cache providers (only needed for cache strategy)
+  // Optional: cache providers (keys must match CacheMeta.id)
   cacheProviders: {
     'redis-main': createRedisCache({ url: '...' }),
   },
@@ -350,6 +350,7 @@ const countResult = await multiDb.query({
 interface QueryDefinition {
   from: string                        // table apiName
   columns?: string[]                  // apiNames; undefined = all allowed for role
+  distinct?: boolean                  // SELECT DISTINCT (default: false)
   filters?: QueryFilter[]
   joins?: QueryJoin[]
   groupBy?: QueryGroupBy[]            // columns to group by
@@ -392,8 +393,8 @@ interface QueryJoin {
 
 interface QueryFilter {
   column: string                      // apiName
-  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'like' | 'is_null' | 'is_not_null'
-  value?: unknown
+  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'between' | 'is_null' | 'is_not_null'
+  value?: unknown                     // for 'between': [min, max] tuple
 }
 ```
 
@@ -608,6 +609,7 @@ interface ColumnRef {
 
 interface SqlParts {
   select: ColumnRef[]                 // columns to select
+  distinct?: boolean                  // SELECT DISTINCT
   from: TableRef
   joins: JoinClause[]
   where: WhereCondition[]
@@ -646,7 +648,7 @@ interface WhereCondition {
 
 interface AggregationClause {
   fn: 'count' | 'sum' | 'avg' | 'min' | 'max'
-  column: ColumnRef
+  column: ColumnRef | '*'             // '*' for count(*)
   alias: string                       // result column name
 }
 ```
@@ -669,7 +671,7 @@ No external SQL generation packages are used — the query shape is predictable 
 [validation]  Column 'internalNote' → DENIED for role 'tenant-user' (not in allowedColumns)
 [access-control] Trimming columns to allowed set: [id, total, status, createdAt]
 [access-control] Masking column 'total' for roles [tenant-user]
-[planning]    Tables needed: [orders(pg-main), users(pg-main)]
+[planning]    Tables needed: [orders(pg-main)]
 [planning]    All tables in 'pg-main' → strategy: DIRECT
 [name-res]    orders.total → public.orders.total_amount
 [name-res]    orders.tenantId → public.orders.tenant_id

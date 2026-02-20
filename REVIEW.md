@@ -147,3 +147,37 @@ When `masked: true`, post-processing needs to know which masking function to app
 `having?: QueryFilter[]` reuses `QueryFilter` where `column` means apiName. In HAVING context, `column` refers to `QueryAggregation.alias`, not a table column.
 
 **Resolution:** Added inline comment documenting this semantic difference.
+
+---
+
+## Round 3
+
+### 22. `AggregationClause.column` can't express `count(*)`
+
+`QueryAggregation.column` allows `'*'`, but the internal `AggregationClause` used `ColumnRef` (requires `tableAlias` + `columnName`).
+
+**Resolution:** Changed `AggregationClause.column` to `ColumnRef | '*'`.
+
+### 23. Debug log example shows 2 tables for single-table query
+
+Validation checks only orders columns, but planning said `Tables needed: [orders(pg-main), users(pg-main)]`. Inconsistent — the example is a single-table query.
+
+**Resolution:** Changed to `[orders(pg-main)]`.
+
+### 24. Missing filter operators
+
+`QueryFilter.operator` had `in` and `like` but not their negations or `between`.
+
+**Resolution:** Added `'not_in'`, `'not_like'`, `'between'`. Documented that `between` uses `value: [min, max]` tuple.
+
+### 25. No `DISTINCT` support
+
+No way to express `SELECT DISTINCT`.
+
+**Resolution:** Added `distinct?: boolean` to `QueryDefinition` (default: `false`) and `distinct?: boolean` to `SqlParts`.
+
+### 26. `CacheMeta.id` not connected to `cacheProviders` key
+
+`executors` map uses `DatabaseMeta.id` as keys. `cacheProviders` keys were not documented as matching `CacheMeta.id`.
+
+**Resolution:** Updated init comment to state "keys must match `CacheMeta.id`".
