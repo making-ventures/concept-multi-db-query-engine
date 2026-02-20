@@ -645,10 +645,10 @@ Given a query touching tables T1, T2, ... Tn:
 2. **Column existence** — only columns defined in table metadata can be referenced. When `columns` is `undefined` and `aggregations` is present, the default is `groupBy` columns only (not all allowed columns) — this avoids rule 7 failures from ungrouped columns being added automatically
 3. **Role permission** — if a table is not in the role's `tables` list → access denied
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
-5. **Filter validity** — filter operators must be valid for the column type (see table below); `is_null`/`is_not_null` additionally require `nullable: true`; malformed compound values (`between`/`not_between` missing `to`, `levenshtein_lte` with negative `maxDistance`, `in` with empty array) are rejected with `INVALID_VALUE`; when `QueryFilter.table` is provided, the table must be the `from` table or one of the joined tables — referencing a non-joined table is rejected; for `QueryColumnFilter`, both columns must exist, the role must allow both, and their types must be compatible (same type, or both orderable); filter groups and exists filters are validated recursively (all nested conditions checked)
+5. **Filter validity** — filter operators must be valid for the column type (see table below); `is_null`/`is_not_null` additionally require `nullable: true`; malformed compound values (`between`/`not_between` missing `to`, `levenshtein_lte` with negative `maxDistance`, `in` with empty array) are rejected with `INVALID_VALUE`; `in`/`not_in` additionally validate that all array elements match the column type (e.g. passing `['a','b']` on an `int` column → `INVALID_VALUE`); when `QueryFilter.table` is provided, the table must be the `from` table or one of the joined tables — referencing a non-joined table is rejected; for `QueryColumnFilter`, both columns must exist, the role must allow both, and their types must be compatible (same type, or both orderable); filter groups and exists filters are validated recursively (all nested conditions checked)
 6. **Join validity** — joined tables must have a defined relation in metadata
 7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database
-8. **Having validity** — `having` filters must reference aliases defined in `aggregations`; `QueryExistsFilter` nested inside `having` groups is rejected (EXISTS in HAVING is not valid SQL)
+8. **Having validity** — `having` filters must reference aliases defined in `aggregations`; `QueryFilter.table` is rejected inside `having` (HAVING operates on aggregation aliases, not table columns); `QueryExistsFilter` nested inside `having` groups is rejected (EXISTS in HAVING is not valid SQL)
 9. **Order By validity** — `orderBy` must reference columns from `from` table, joined tables, or aggregation aliases defined in `aggregations`
 10. **ByIds validity** — `byIds` requires a non-empty array and a single-column primary key; cannot combine with `groupBy` or `aggregations`
 11. **Limit/Offset validity** — `limit` and `offset` must be non-negative integers when provided; `offset` requires `limit` (offset without limit is rejected)
@@ -949,9 +949,10 @@ interface WhereColumnCondition {
   rightColumn: ColumnRef
 }
 
-// Range condition — for 'between' operator
+// Range condition — for 'between' / 'not_between' operators
 interface WhereBetween {
   column: ColumnRef
+  not?: boolean                       // when true, emits NOT (col BETWEEN ... AND ...) — used by 'not_between' operator
   fromParamIndex: number              // param index for lower bound
   toParamIndex: number                // param index for upper bound
 }
@@ -1228,6 +1229,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 137 | `not_icontains` filter | users WHERE email not_icontains 'SPAM' | dialect-specific case-insensitive `NOT LIKE '%SPAM%'` |
 | 138 | Top-level filter on joined column | orders JOIN products, top-level filter: { column: 'category', table: 'products', operator: '=', value: 'electronics' } | `t1."category" = $1` in WHERE (same as QueryJoin.filters) |
 | 139 | Filter with `table` referencing non-joined table | users query, filter `{ column: 'status', table: 'orders', operator: '=' }` without joining orders | `ValidationError` — table 'orders' is not `from` and not in `joins` |
+| 140 | `in` with mismatched element types | orders WHERE status IN (1, 2) but status is 'string' | `ValidationError` — `INVALID_VALUE`: array elements must match column type |
+| 141 | `table` in having filter rejected | orders GROUP BY status, HAVING { column: 'totalSum', table: 'orders' } | `ValidationError` — `table` not allowed in `having` filters |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 
@@ -1545,7 +1548,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
