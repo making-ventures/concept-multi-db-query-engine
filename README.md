@@ -623,7 +623,7 @@ Given a query touching tables T1, T2, ... Tn:
 ## Validation Rules
 
 1. **Table existence** — only tables defined in metadata can be queried
-2. **Column existence** — only columns defined in table metadata can be referenced; explicit empty `columns: []` is only valid when `aggregations` is present (aggregation-only query, e.g. `SELECT SUM(total) FROM orders`); empty `columns: []` without aggregations is rejected. When `columns` is `undefined` and `aggregations` is present, the default is `groupBy` columns only (not all allowed columns) — this avoids rule 7 failures from ungrouped columns being added automatically
+2. **Column existence** — only columns defined in table metadata can be referenced. When `columns` is `undefined` and `aggregations` is present, the default is `groupBy` columns only (not all allowed columns) — this avoids rule 7 failures from ungrouped columns being added automatically
 3. **Role permission** — if a table is not in the role's `tables` list → access denied
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
 5. **Filter validity** — filter operators must be valid for the column type; filter groups and exists filters are validated recursively (all nested conditions checked)
@@ -635,7 +635,7 @@ Given a query touching tables T1, T2, ... Tn:
 11. **Limit/Offset validity** — `limit` and `offset` must be non-negative integers when provided
 12. **Exists filter validity** — `QueryExistsFilter.table` must have a defined relation to the `from` table (or a joining table); role must allow access to the related table
 13. **Role existence** — all role IDs in `ExecutionContext.roles` must exist in loaded roles; unknown IDs are rejected with `UNKNOWN_ROLE`
-14. **Aggregation validity** — aggregation aliases must be unique across all aggregations; aliases must not collide with column apiNames present in the result set (avoids ambiguous output columns)
+14. **Aggregation validity** — aggregation aliases must be unique across all aggregations; aliases must not collide with column apiNames present in the result set (avoids ambiguous output columns); explicit empty `columns: []` is only valid when `aggregations` is present (aggregation-only query, e.g. `SELECT SUM(total) FROM orders`) — empty `columns: []` without aggregations is rejected
 
 All validation errors are **collected, not thrown one at a time**. The system runs all applicable checks and throws a single `ValidationError` containing every issue found. This lets callers fix all problems at once instead of playing whack-a-mole.
 
@@ -661,7 +661,7 @@ class ConfigError extends MultiDbError {
 
 class ConnectionError extends MultiDbError {
   code: 'CONNECTION_FAILED'
-  details: { unreachable: { id: string; type: 'executor' | 'cache'; error?: string }[] }
+  details: { unreachable: { id: string; type: 'executor' | 'cache'; cause?: Error }[] }
 }
 
 class ValidationError extends MultiDbError {
@@ -669,7 +669,7 @@ class ValidationError extends MultiDbError {
   errors: {
     code: 'UNKNOWN_TABLE' | 'UNKNOWN_COLUMN' | 'UNKNOWN_ROLE' | 'ACCESS_DENIED' | 'INVALID_FILTER' | 'INVALID_JOIN' | 'INVALID_GROUP_BY' | 'INVALID_HAVING' | 'INVALID_ORDER_BY' | 'INVALID_BY_IDS' | 'INVALID_LIMIT' | 'INVALID_EXISTS' | 'INVALID_AGGREGATION'
     message: string
-    details: { expected?: string; actual?: string; table?: string; column?: string; role?: string }
+    details: { expected?: string; actual?: string; table?: string; column?: string; role?: string; alias?: string }
   }[]
 }
 
@@ -700,7 +700,7 @@ class ProviderError extends MultiDbError {
 
 The top-level `Error.message` for multi-error types summarizes the count: e.g. `"Config invalid: 3 errors"` for `ConfigError`, `"Validation failed: 5 errors"` for `ValidationError`. Individual `errors[].message` provides per-issue detail.
 
-`ConfigError` is thrown at init time and during `reloadMetadata()` — it collects **all** config issues (invalid apiNames, duplicate names, broken references, broken sync references) into a single error with an `errors[]` array, same philosophy as `ValidationError`. `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query — `details` is a discriminated union keyed by `code`, so each variant carries only its relevant fields. `ExecutionError` is thrown during SQL execution or cache access — `details` is a discriminated union keyed by `code` (`QUERY_FAILED` includes `sql` + `params`, `EXECUTOR_MISSING` includes `database`, `CACHE_PROVIDER_MISSING` includes `cacheId`). `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails — at init time or during `reloadMetadata()` / `reloadRoles()`. Both `ExecutionError` and `ProviderError` use ES2022 `Error.cause` to chain the original error instead of a custom field.
+`ConfigError` is thrown at init time and during `reloadMetadata()` — it collects **all** config issues (invalid apiNames, duplicate names, broken references, broken sync references) into a single error with an `errors[]` array, same philosophy as `ValidationError`. `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). Each unreachable entry carries `cause?: Error` to preserve the original ping failure (stack trace, message). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query — `details` is a discriminated union keyed by `code`, so each variant carries only its relevant fields. `ExecutionError` is thrown during SQL execution or cache access — `details` is a discriminated union keyed by `code` (`QUERY_FAILED` includes `sql` + `params`, `EXECUTOR_MISSING` includes `database`, `CACHE_PROVIDER_MISSING` includes `cacheId`). `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails — at init time or during `reloadMetadata()` / `reloadRoles()`. Both `ExecutionError` and `ProviderError` use ES2022 `Error.cause` to chain the original error instead of a custom field.
 
 ---
 
@@ -1001,7 +1001,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 43 | Invalid EXISTS filter | orders EXISTS metrics (no relation) | rule 12 — INVALID_EXISTS |
 | 46 | Invalid filter operator | orders WHERE id > 'some-uuid' (uuid type) | rule 5 — INVALID_FILTER |
 | 47 | Access denied on column | orders columns: [internalNote] (tenant-user) | rule 4 — ACCESS_DENIED (column) |
-| 78 | Empty columns array (no aggregations) | orders columns: [] | rule 2 — UNKNOWN_COLUMN |
+| 78 | Empty columns array (no aggregations) | orders columns: [] | rule 14 — INVALID_AGGREGATION |
 | 82 | Unknown role ID | context roles: { user: ['nonexistent'] } | rule 13 — UNKNOWN_ROLE |
 | 86 | EXISTS inside HAVING | orders HAVING group with EXISTS invoices | rule 8 — INVALID_HAVING (EXISTS not valid in HAVING) |
 | 87 | Duplicate aggregation alias | orders SUM(total) as x, COUNT(*) as x | rule 14 — INVALID_AGGREGATION |
