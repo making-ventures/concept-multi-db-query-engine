@@ -974,6 +974,10 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 33 | byIds + filters (cache skip) | users byIds=[1,2] + filter status='active' | direct → pg-main (cache skipped) |
 | 34 | Multiple validation errors | from: 'nonexistent', column: 'bad', filter on 'missing' | errors[] contains all issues |
 | 35 | Masking on cached results | users byIds=[1,2] (tenant-user) | cache → redis, email still masked |
+| 36 | Invalid limit/offset | orders limit: -1 | validation error: INVALID_LIMIT |
+| 37 | byIds + aggregations | users byIds + GROUP BY | validation error: INVALID_BY_IDS |
+| 38 | Columns omitted | orders (no columns specified, tenant-user) | returns only role-allowed columns |
+| 39 | Debug mode | orders (debug: true) | result includes debugLog entries |
 
 ### Sample Column Definitions (orders table)
 
