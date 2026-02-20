@@ -415,8 +415,8 @@ interface QueryJoin {
 
 interface QueryFilter {
   column: string                      // apiName
-  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'between' | 'is_null' | 'is_not_null'
-  value?: unknown                     // for 'between': [min, max] tuple
+  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'is_null' | 'is_not_null'
+  value?: unknown
 }
 ```
 
@@ -665,7 +665,6 @@ interface WhereCondition {
   column: ColumnRef
   operator: string                    // '=', 'ILIKE', 'ANY', etc. — string (not union) because dialects may emit operators beyond the public QueryFilter set
   paramIndex?: number                 // for parameterized values
-  paramIndexEnd?: number              // second param index, used for BETWEEN (decomposed from QueryFilter 'between')
   literal?: string                    // for IS NULL, IS NOT NULL
 }
 
@@ -802,8 +801,7 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 21 | Aggregation + join | orders + products GROUP BY category | correct cross-table aggregation |
 | 22 | HAVING clause | orders GROUP BY status HAVING SUM(total) > 100 | correct HAVING per dialect |
 | 23 | DISTINCT query | orders DISTINCT status | correct SELECT DISTINCT per dialect |
-| 24 | BETWEEN filter | orders WHERE total BETWEEN 100 AND 500 | correct BETWEEN with two params |
-| 25 | Cross-table ORDER BY | orders + products ORDER BY products.category | correct qualified ORDER BY |
+| 24 | Cross-table ORDER BY | orders + products ORDER BY products.category | correct qualified ORDER BY |
 
 ### Sample Column Definitions (orders table)
 
