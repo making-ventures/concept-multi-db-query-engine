@@ -352,7 +352,7 @@ interface QueryDefinition {
   columns?: string[]                  // apiNames; undefined = all allowed for role
   filters?: QueryFilter[]
   joins?: QueryJoin[]
-  groupBy?: string[]                  // apiNames to group by
+  groupBy?: QueryGroupBy[]            // columns to group by
   aggregations?: QueryAggregation[]   // aggregate functions
   having?: QueryFilter[]              // filters on aggregated values (applied after GROUP BY)
   limit?: number
@@ -366,13 +366,20 @@ interface QueryDefinition {
 
 interface QueryAggregation {
   column: string                      // apiName of column to aggregate
+  table?: string                      // apiName of table; omit for `from` table
   fn: 'count' | 'sum' | 'avg' | 'min' | 'max'
   alias: string                       // result column name
 }
 
 interface QueryOrderBy {
   column: string                      // apiName
+  table?: string                      // apiName of table; omit for `from` table
   direction: 'asc' | 'desc'
+}
+
+interface QueryGroupBy {
+  column: string                      // apiName
+  table?: string                      // apiName of table; omit for `from` table
 }
 
 interface QueryJoin {
