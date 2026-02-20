@@ -5,7 +5,7 @@
 Build a reusable, metadata-driven query engine that lets applications query, filter, join, and aggregate data across Postgres, ClickHouse, Iceberg, and Redis through a single typed API. The engine:
 
 - Accepts queries using **apiNames** (decoupled from physical schema)
-- Supports **rich filtering** — 26 operators (comparison, pattern, range, fuzzy), column-vs-column comparisons, recursive AND/OR groups, EXISTS/NOT EXISTS subqueries
+- Supports **rich filtering** — 26 operators (comparison, pattern, range, fuzzy), column-vs-column comparisons, recursive AND/OR groups, EXISTS/NOT EXISTS subqueries with optional counted variant
 - Supports **JOINs** (inner/left) resolved from relation metadata, **GROUP BY**, and **aggregations** (count, sum, avg, min, max) with HAVING
 - Automatically selects the **optimal execution strategy** — direct DB, cached, materialized replica, or Trino cross-DB federation
 - Enforces **scoped access control** — user roles and service roles intersected to determine effective permissions
@@ -522,6 +522,13 @@ interface QueryExistsFilter {
   exists: boolean                     // true = EXISTS, false = NOT EXISTS
   table: string                       // related table apiName (relation resolved via metadata, same as joins)
   filters?: (QueryFilter | QueryColumnFilter | QueryFilterGroup | QueryExistsFilter)[]  // optional conditions on the related table
+  count?: {                           // optional: require specific count of matching related rows
+    operator: '=' | '!=' | '>' | '<' | '>=' | '<='  // comparison applied to the subquery count
+    value: number                     // positive integer (validated: must be ≥ 0, integer)
+  }                                   // when present, changes SQL from EXISTS to a counted correlated subquery:
+                                      //   (SELECT COUNT(*) FROM related WHERE ...) >= N
+                                      // cannot combine with `exists: false` — contradictory; use operator instead
+                                      //   e.g. "fewer than 3" → exists: true, count: { operator: '<', value: 3 }
 }
 ```
 
@@ -665,7 +672,7 @@ Given a query touching tables T1, T2, ... Tn:
 9. **Order By validity** — `orderBy` must reference columns from `from` table, joined tables, or aggregation aliases defined in `aggregations`
 10. **ByIds validity** — `byIds` requires a non-empty array and a single-column primary key; cannot combine with `groupBy` or `aggregations`; `byIds` + `joins` is valid — cache (P0) is skipped (cache stores single-table data) but direct DB (P1+) handles it normally (`WHERE pk = ANY($1)` with JOINs)
 11. **Limit/Offset validity** — `limit` and `offset` must be non-negative integers when provided; `offset` requires `limit` (offset without limit is rejected)
-12. **Exists filter validity** — `QueryExistsFilter.table` must have a defined relation to the `from` table (or a joining table); role must allow access to the related table
+12. **Exists filter validity** — `QueryExistsFilter.table` must have a defined relation to the `from` table (or a joining table); role must allow access to the related table; when `count` is provided, `value` must be a non-negative integer and `exists` must be `true` (`exists: false` + `count` is contradictory — use the count operator to express the condition, e.g. `< 3` for "fewer than 3")
 13. **Role existence** — all role IDs in `ExecutionContext.roles` must exist in loaded roles; unknown IDs are rejected with `UNKNOWN_ROLE`
 14. **Aggregation validity** — aggregation aliases must be unique across all aggregations; aliases must not collide with column apiNames present in the result set (avoids ambiguous output columns); explicit empty `columns: []` is only valid when `aggregations` is present (aggregation-only query, e.g. `SELECT SUM(total) FROM orders`) — empty `columns: []` without aggregations is rejected
 
@@ -838,6 +845,7 @@ This decouples the API contract from database schema evolution.
 | BETWEEN | `col BETWEEN $1 AND $2` | `col BETWEEN {p1} AND {p2}` | `col BETWEEN ? AND ?` |
 | NOT BETWEEN | `col NOT BETWEEN $1 AND $2` | `NOT (col BETWEEN {p1} AND {p2})` | `col NOT BETWEEN ? AND ?` |
 | Boolean | `true/false` | `1/0` | `true/false` |
+| Counted subquery | `(SELECT COUNT(*) FROM ... WHERE ...) >= $N` | `(SELECT COUNT(*) FROM ... WHERE ...) >= {pN:UInt64}` | `(SELECT COUNT(*) FROM ... WHERE ...) >= ?` |
 
 Each engine gets a `SqlDialect` implementation.
 
@@ -892,7 +900,7 @@ interface SqlParts {
 }
 
 // Recursive WHERE tree — mirrors QueryFilterGroup at the physical level
-type WhereNode = WhereCondition | WhereColumnCondition | WhereBetween | WhereFunction | WhereGroup | WhereExists
+type WhereNode = WhereCondition | WhereColumnCondition | WhereBetween | WhereFunction | WhereGroup | WhereExists | WhereCountedSubquery
 
 // Function-based condition — for operators that wrap the column in a function (e.g. levenshtein_lte)
 interface WhereFunction {
@@ -934,6 +942,19 @@ interface WhereExists {
     join: { leftColumn: ColumnRef; rightColumn: ColumnRef }  // correlated condition (outer.fk = inner.pk)
     where?: WhereNode                 // additional conditions inside the subquery
   }
+}
+
+// Counted variant — replaces EXISTS with a counted correlated subquery
+// Used when QueryExistsFilter.count is provided
+interface WhereCountedSubquery {
+  subquery: {
+    from: TableRef
+    join: { leftColumn: ColumnRef; rightColumn: ColumnRef }
+    where?: WhereNode
+  }
+  operator: string                    // '>=', '>', '=', '!=', '<', '<='
+  countParamIndex: number             // param index for the count value
+  // Emits: (SELECT COUNT(*) FROM <from> WHERE <join> AND <where>) <operator> $N
 }
 
 interface OrderByClause {
@@ -1121,6 +1142,9 @@ Tests are split between packages. Validation package tests run without DB connec
 | 41 | Invalid HAVING | orders having on non-existent alias | rule 8 — INVALID_HAVING |
 | 42 | Invalid ORDER BY | orders orderBy: products.category (not joined) | rule 9 — INVALID_ORDER_BY |
 | 43 | Invalid EXISTS filter | orders EXISTS metrics (no relation) | rule 12 — INVALID_EXISTS |
+| 157 | `exists: false` + `count` | orders EXISTS(false) invoices count: { operator: '>=', value: 3 } | rule 12 — INVALID_EXISTS (`exists: false` + `count` contradictory) |
+| 158 | `count.value` negative | orders EXISTS invoices count: { operator: '>=', value: -1 } | rule 12 — INVALID_EXISTS (value must be ≥ 0) |
+| 159 | `count.value` non-integer | orders EXISTS invoices count: { operator: '>=', value: 2.5 } | rule 12 — INVALID_EXISTS (value must be integer) |
 | 46 | Invalid filter operator | orders WHERE id > 'some-uuid' (uuid type) | rule 5 — INVALID_FILTER |
 | 47 | Access denied on column | orders columns: [internalNote] (tenant-user) | rule 4 — ACCESS_DENIED (column) |
 | 65 | Empty byIds | orders byIds=[] | rule 10 — INVALID_BY_IDS |
@@ -1205,6 +1229,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 25 | EXISTS filter | orders WHERE EXISTS invoices(status='paid') | EXISTS subquery |
 | 26 | NOT EXISTS filter | users WHERE NOT EXISTS orders | NOT EXISTS subquery |
 | 27 | Nested EXISTS + filter group | orders WHERE (status='active' OR EXISTS invoices) | EXISTS inside OR group |
+| 160 | Counted EXISTS | orders WHERE EXISTS invoices(count: { operator: '>=', value: 3 }) | `(SELECT COUNT(*) FROM invoices WHERE ...) >= $N` — `WhereCountedSubquery` IR |
+| 161 | Counted EXISTS with filters | orders WHERE EXISTS invoices(status='paid', count: { operator: '=', value: 2 }) | `(SELECT COUNT(*) FROM invoices WHERE ... AND status='paid') = $N` |
 | 28 | OR filter group | orders WHERE (status='active' OR total > 100) | OR clause |
 | 29 | Negated filter group | orders WHERE NOT (status='cancelled' AND total = 0) | NOT (...) |
 | 30 | ILIKE filter | users WHERE email ILIKE '%@example%' | dialect-specific ILIKE |
@@ -1508,7 +1534,7 @@ const roles: RoleMeta[] = [
 | Validation | Strict — only metadata-defined entities | Fail fast with clear errors |
 | Join results | Flat denormalized rows (no nesting) | `limit` applies to DB rows; with one-to-many joins, `limit: 10` may yield fewer than 10 parent entities. Nesting would require a two-query approach (fetch parent IDs first, then children), breaking the single-query model. Callers can group results using `meta.columns[].fromTable` |
 | Filter logic | Recursive `QueryFilterGroup` with `and`/`or` and optional `not` | Top-level filters array is implicit AND; use `QueryFilterGroup` for OR, nested combinations, or negation (`not: true` → `NOT (...)`). Mirrors to `WhereGroup` in `SqlParts` IR. Simple queries stay simple, complex logic is opt-in |
-| Exists filters | `QueryExistsFilter` with correlated subquery | Leverages existing relation metadata for `EXISTS`/`NOT EXISTS`. No implicit JOIN — keeps result set clean. Access control applied to the related table. Mirrors to `WhereExists` in `SqlParts` IR |
+| Exists filters | `QueryExistsFilter` with correlated subquery, optional `count` | Leverages existing relation metadata for `EXISTS`/`NOT EXISTS`. No implicit JOIN — keeps result set clean. Access control applied to the related table. Mirrors to `WhereExists` / `WhereCountedSubquery` in `SqlParts` IR. Optional `count` changes the subquery from boolean EXISTS to a counted comparison (`(SELECT COUNT(*) ...) >= N`), enabling "at least N related rows" semantics |
 | Filter table qualifier | Optional `table?` on `QueryFilter` | Allows filtering on joined-table columns at top level without using `QueryJoin.filters`. Resolves ambiguity when `from` and joined tables share a column apiName |
 | Imports | Absolute paths, no `../` | Clean, refactor-friendly |
 
@@ -1588,7 +1614,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1624,7 +1650,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── init/                # scenarios 53, 54, 55, 63
 │   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
-│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155, 156
+│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155, 156, 160, 161
 │   │       ├── cache/               # scenario 35
 │   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105, 131, 132, 152
 │   │
