@@ -22,6 +22,7 @@ This document breaks the concept into sequential implementation stages. Each sta
    - `context.ts` — `ExecutionContext`
 6. Define internal IR types in `packages/core/src/`:
    - `SqlParts`, `ColumnRef`, `TableRef`, `WhereNode` (all 8 variants), `HavingNode` (3 variants), `JoinClause`, `OrderByClause`, `AggregationClause`, `ColumnMapping`, `CorrelatedSubquery`
+   - `DbExecutor`, `CacheProvider` — interfaces implemented by executor/cache packages (Stage 11)
 7. Export public surface from `packages/validation/src/index.ts`
 8. Verify: `pnpm build` succeeds across all packages (types compile)
 
@@ -263,7 +264,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 **Package:** `@mkven/multi-db`
 
 **Tasks:**
-1. Build database connectivity graph from metadata (tables, syncs, cache configs)
+1. Use the database connectivity graph built in Stage 5 to evaluate reachability
 2. Implement P0 — Cache strategy:
    - `byIds` only, no filters, no joins, single-table, single-column PK
    - Column subset check (cache may not have all requested columns)
@@ -384,7 +385,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Tasks:**
 1. Run full test suite across all packages — `pnpm test` at monorepo root
-2. Verify scenario counts: validation (77), core (138), client (19), contract (7) — numbers may overlap where a scenario is tested in multiple packages (e.g. #157 is validated in both validation/query and core/generator)
+2. Verify all 235 unique scenarios pass — some appear in multiple packages (e.g. #157 is validated in both validation/query and core/generator)
 3. Smoke-test the full pipeline end-to-end: init → query → reload → healthCheck → close
 4. Verify `pnpm build` produces clean packages with correct dependency graph
 5. Review test coverage gaps — any untested code paths surfaced by coverage reports
@@ -406,9 +407,9 @@ This document breaks the concept into sequential implementation stages. Each sta
 | 7 | core | Name resolution | — |
 | 8 | core | SQL gen — Postgres | 89 |
 | 9 | core | SQL gen — ClickHouse + Trino | — (same 89, 2 more dialects) |
-| 10 | core | Query planner (P0–P4) | 20 |
+| 10 | core | Query planner (P0–P4) | 21 |
 | 11 | executor-*, cache-redis | DB executors + Redis cache | — |
-| 12 | core | Full pipeline + lifecycle | 21 |
+| 12 | core | Full pipeline + lifecycle | 20 |
 | 13 | client | HTTP client + contract tests | 19 |
 | 14 | all | Final verification | — |
 | **Total** | | | **235** |
