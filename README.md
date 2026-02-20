@@ -963,7 +963,60 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 
 ### Test Scenarios
 
-| # | Scenario | Tables | Expected Strategy |
+Each scenario maps to the test directory that owns it. Some scenarios touch multiple phases but are assigned to their **primary concern**.
+
+#### `tests/init/` — init-time errors (ConfigError, ConnectionError, ProviderError)
+
+| # | Scenario | Input | Error |
+|---|---|---|---|
+| 49 | Invalid apiName format | table apiName 'Order_Items' (has underscore) | ConfigError: CONFIG_INVALID (INVALID_API_NAME) |
+| 50 | Duplicate apiName | two tables with apiName 'orders' | ConfigError: CONFIG_INVALID (DUPLICATE_API_NAME) |
+| 51 | Invalid DB reference | table references non-existent database 'pg-other' | ConfigError: CONFIG_INVALID (INVALID_REFERENCE) |
+| 52 | Invalid relation | relation references non-existent table 'invoiceLines' | ConfigError: CONFIG_INVALID (INVALID_RELATION) |
+| 80 | Multiple config errors | invalid apiName + duplicate + broken reference | ConfigError: CONFIG_INVALID, errors[] contains all 3 |
+| 81 | Invalid sync reference | ExternalSync references non-existent table/database | ConfigError: CONFIG_INVALID (INVALID_SYNC) |
+| 53 | Connection failed | executor ping fails at init | ConnectionError: CONNECTION_FAILED |
+| 54 | Metadata provider fails | MetadataProvider.load() throws | ProviderError: METADATA_LOAD_FAILED |
+| 55 | Role provider fails | RoleProvider.load() throws | ProviderError: ROLE_LOAD_FAILED |
+| 63 | Lazy connections | validateConnections: false | init succeeds, healthCheck detects issues |
+
+#### `tests/validation/` — input validation against metadata + roles
+
+| # | Scenario | Input | Rule |
+|---|---|---|---|
+| 15 | No-access role | any table | rule 3 — ACCESS_DENIED (table) |
+| 17 | Invalid table name | nonexistent | rule 1 — UNKNOWN_TABLE |
+| 18 | Invalid column name | orders.nonexistent | rule 2 — UNKNOWN_COLUMN |
+| 32 | Invalid join (no relation) | orders + metrics | rule 6 — INVALID_JOIN |
+| 34 | Multiple validation errors | from: 'nonexistent', column: 'bad', filter on 'missing' | multi-error collection |
+| 36 | Invalid limit/offset | orders limit: -1 | rule 11 — INVALID_LIMIT |
+| 37 | byIds + aggregations | users byIds + GROUP BY | rule 10 — INVALID_BY_IDS |
+| 65 | Empty byIds | orders byIds=[] | rule 10 — INVALID_BY_IDS |
+| 40 | Invalid GROUP BY | orders columns: [status, total], groupBy: [status] | rule 7 — INVALID_GROUP_BY |
+| 41 | Invalid HAVING | orders having on non-existent alias | rule 8 — INVALID_HAVING |
+| 42 | Invalid ORDER BY | orders orderBy: products.category (not joined) | rule 9 — INVALID_ORDER_BY |
+| 43 | Invalid EXISTS filter | orders EXISTS metrics (no relation) | rule 12 — INVALID_EXISTS |
+| 46 | Invalid filter operator | orders WHERE id > 'some-uuid' (uuid type) | rule 5 — INVALID_FILTER |
+| 47 | Access denied on column | orders columns: [internalNote] (tenant-user) | rule 4 — ACCESS_DENIED (column) |
+| 78 | Empty columns array (no aggregations) | orders columns: [] | rule 2 — UNKNOWN_COLUMN |
+| 82 | Unknown role ID | context roles: { user: ['nonexistent'] } | rule 13 — UNKNOWN_ROLE |
+
+#### `tests/access/` — role-based column trimming, masking, scope logic
+
+| # | Scenario | Input | Focus |
+|---|---|---|---|
+| 13 | Admin role | any table | all columns visible |
+| 14 | Tenant-user role | orders | subset columns only |
+| 14b | Column masking | orders (tenant-user) | total masked |
+| 14c | Multi-role within scope | orders (tenant-user + regional-manager) | union within user scope (all order columns) |
+| 14d | Cross-scope restriction | orders (admin user + orders-service) | restricted to orders-service tables |
+| 14f | Omitted scope | orders (only user: ['admin'], no service) | no service restriction |
+| 16 | Column trimming on byIds | users byIds + limited columns in role | only intersected columns |
+| 38 | Columns omitted | orders (no columns specified, tenant-user) | returns only role-allowed columns |
+
+#### `tests/planner/` — strategy selection (P0–P4)
+
+| # | Scenario | Tables | Strategy |
 |---|---|---|---|
 | 1 | Single PG table | orders | direct → pg-main |
 | 2 | Join within same PG | orders + products | direct → pg-main |
@@ -975,213 +1028,66 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 8 | By-ID with cache hit | users byIds=[1,2,3] | cache → redis |
 | 9 | By-ID cache miss | orders byIds=[1,2] | direct → pg-main |
 | 10 | By-ID partial cache | users byIds=[1,2,3] (1,2 cached) | cache + direct merge |
-| 11 | Freshness=realtime, has materialized | orders + events (realtime) | skip materialized (lag=seconds), trino |
-| 12 | Freshness=hours, has materialized | orders + events (hours ok) | materialized → ch-analytics |
-| 13 | Admin role | any table | all columns visible |
-| 14 | Tenant-user role | orders | subset columns only |
-| 14b | Column masking | orders (tenant-user) | total masked |
-| 14c | Multi-role within scope | orders (tenant-user + regional-manager) | union within user scope (all order columns) |
-| 14d | Cross-scope restriction | orders (admin user + orders-service) | restricted to orders-service tables |
-| 14e | Count mode | orders (count) | returns count only |
-| 14f | Omitted scope | orders (only user: ['admin'], no service) | no service restriction |
-| 15 | No-access role | any table | denied |
-| 16 | Column trimming on byIds | users byIds + limited columns in role | only intersected columns |
-| 17 | Invalid table name | nonexistent | validation error |
-| 18 | Invalid column name | orders.nonexistent | validation error |
+| 11 | Freshness=realtime | orders + events (realtime) | skip materialized (lag=seconds), trino |
+| 12 | Freshness=hours | orders + events (hours ok) | materialized → ch-analytics |
 | 19 | Trino disabled | cross-db query | PlannerError: TRINO_DISABLED |
-| 20 | Aggregation query | orders GROUP BY status, SUM(total) | correct SQL per dialect |
-| 21 | Aggregation + join | orders + products GROUP BY category | correct cross-table aggregation |
-| 22 | HAVING clause | orders GROUP BY status HAVING SUM(total) > 100 | correct HAVING per dialect |
-| 23 | DISTINCT query | orders DISTINCT status | correct SELECT DISTINCT per dialect |
-| 24 | Cross-table ORDER BY | orders + products ORDER BY products.category | correct qualified ORDER BY |
-| 25 | EXISTS filter | orders WHERE EXISTS invoices(status='paid') | correct EXISTS subquery per dialect |
-| 26 | NOT EXISTS filter | users WHERE NOT EXISTS orders | correct NOT EXISTS subquery per dialect |
-| 27 | Nested EXISTS + filter group | orders WHERE (status='active' OR EXISTS invoices) | EXISTS inside OR group |
-| 28 | OR filter group | orders WHERE (status='active' OR total > 100) | correct OR clause per dialect |
-| 29 | Negated filter group | orders WHERE NOT (status='cancelled' AND total = 0) | correct NOT (...) per dialect |
-| 30 | ILIKE filter | users WHERE email ILIKE '%@example%' | correct case-insensitive LIKE per dialect |
-| 31 | SQL-only mode | orders (sql-only) | returns SqlResult with sql + params, no execution |
-| 32 | Invalid join (no relation) | orders + metrics | validation error: INVALID_JOIN |
 | 33 | byIds + filters (cache skip) | users byIds=[1,2] + filter role='admin' | direct → pg-main (cache skipped) |
-| 34 | Multiple validation errors | from: 'nonexistent', column: 'bad', filter on 'missing' | errors[] contains all issues |
-| 35 | Masking on cached results | users byIds=[1,2] (tenant-user) | cache → redis, email still masked |
-| 36 | Invalid limit/offset | orders limit: -1 | validation error: INVALID_LIMIT |
-| 37 | byIds + aggregations | users byIds + GROUP BY | validation error: INVALID_BY_IDS |
-| 38 | Columns omitted | orders (no columns specified, tenant-user) | returns only role-allowed columns |
-| 39 | Debug mode | orders (debug: true) | result includes debugLog entries |
-| 40 | Invalid GROUP BY | orders columns: [status, total], groupBy: [status] (total not grouped) | validation error: INVALID_GROUP_BY |
-| 41 | Invalid HAVING | orders having on non-existent alias | validation error: INVALID_HAVING |
-| 42 | Invalid ORDER BY | orders orderBy: products.category (products not joined) | validation error: INVALID_ORDER_BY |
-| 43 | Invalid EXISTS filter | orders EXISTS metrics (no relation) | validation error: INVALID_EXISTS |
-| 44 | Executor missing | events (execute mode, no ch-analytics executor) | ExecutionError: EXECUTOR_MISSING |
-| 45 | is_null filter | orders WHERE productId IS NULL | correct IS NULL per dialect |
-| 46 | Invalid filter operator | orders WHERE id > 'some-uuid' (uuid type) | validation error: INVALID_FILTER |
-| 47 | Access denied on column | orders columns: [internalNote] (tenant-user) | validation error: ACCESS_DENIED |
-| 48 | Cache provider missing | users byIds=[1] (no redis provider registered) | ExecutionError: CACHE_PROVIDER_MISSING |
-| 49 | Invalid apiName format | table apiName 'Order_Items' (has underscore) | ConfigError: CONFIG_INVALID (INVALID_API_NAME) |
-| 50 | Duplicate apiName | two tables with apiName 'orders' | ConfigError: CONFIG_INVALID (DUPLICATE_API_NAME) |
-| 51 | Invalid DB reference | table references non-existent database 'pg-other' | ConfigError: CONFIG_INVALID (INVALID_REFERENCE) |
-| 52 | Invalid relation | relation references non-existent table 'invoiceLines' | ConfigError: CONFIG_INVALID (INVALID_RELATION) |
-| 53 | Connection failed | executor ping fails at init | ConnectionError: CONNECTION_FAILED |
-| 54 | Metadata provider fails | MetadataProvider.load() throws | ProviderError: METADATA_LOAD_FAILED |
-| 55 | Role provider fails | RoleProvider.load() throws | ProviderError: ROLE_LOAD_FAILED |
 | 56 | No Trino catalog | trino enabled, database missing trinoCatalog | PlannerError: NO_CATALOG |
-| 57 | Freshness unmet | realtime required, all paths have lag, no trino catalog | PlannerError: FRESHNESS_UNMET |
-| 58 | Query execution fails | orders (executor throws at runtime) | ExecutionError: QUERY_FAILED (includes sql + params) |
-| 59 | Unreachable tables | metrics + tenants (no replica, no trino catalog for ch-analytics) | PlannerError: UNREACHABLE_TABLES |
-| 60 | Health check | all executors + cache providers | healthCheck() returns per-provider status |
-| 61 | Hot-reload metadata | reloadMetadata() with new table added | next query sees new table |
-| 62 | Reload failure | reloadRoles() with failing provider | ProviderError, old config preserved |
-| 63 | Lazy connections | validateConnections: false | init succeeds, healthCheck detects issues |
+| 57 | Freshness unmet | realtime required, all paths have lag | PlannerError: FRESHNESS_UNMET |
+| 59 | Unreachable tables | metrics + tenants (no replica, no trino catalog) | PlannerError: UNREACHABLE_TABLES |
 | 64 | Multi-table join (3 tables) | orders + products + users (all pg-main) | direct → pg-main, 2 JOINs |
-| 65 | Empty byIds | orders byIds=[] | validation error: INVALID_BY_IDS |
-| 66 | `in` filter | orders WHERE status IN ('active','shipped') | correct array param binding per dialect |
-| 67 | `not_in` filter | orders WHERE status NOT IN ('cancelled') | correct NOT IN per dialect |
-| 68 | `is_not_null` filter | orders WHERE productId IS NOT NULL | correct IS NOT NULL per dialect |
-| 69 | Join-scoped filter | orders JOIN products, products.category = 'electronics' (via QueryJoin.filters) | filter on joined table |
-| 70 | Deeply nested WHERE | orders WHERE (status='active' OR (total > 100 AND createdAt >= '2025-01-01')) | 3-level nesting |
-| 71 | Mixed top-level filters | orders WHERE status='active' AND (total > 50 OR total < 10) AND EXISTS invoices(status='paid') | filter + group + exists combined |
-| 72 | Multiple HAVING conditions | orders GROUP BY status HAVING SUM(total) > 100 AND COUNT(*) > 5 | two aggregate conditions |
-| 73 | HAVING with OR group | orders GROUP BY status HAVING (SUM(total) > 1000 OR AVG(total) > 200) | OR in HAVING |
-| 74 | `like` filter | orders WHERE status LIKE 'act%' | correct case-sensitive LIKE per dialect |
-| 75 | `not_like` filter | orders WHERE status NOT LIKE '%cancel%' | correct NOT LIKE per dialect |
-| 76 | Count + groupBy ignored | orders GROUP BY status, SUM(total) (count mode) | groupBy/aggregations/having ignored, returns scalar count |
-| 77 | Order by aggregation alias | orders GROUP BY status, SUM(total) as totalSum, ORDER BY totalSum | correct ORDER BY alias per dialect |
-| 78 | Empty columns array (no aggregations) | orders columns: [] | validation error: UNKNOWN_COLUMN |
 | 79 | Single Iceberg table query | ordersArchive | direct via trino executor (Trino dialect, single catalog) |
-| 80 | Multiple config errors | invalid apiName + duplicate + broken reference | ConfigError: CONFIG_INVALID, errors[] contains all 3 |
-| 81 | Invalid sync reference | ExternalSync references non-existent table/database | ConfigError: CONFIG_INVALID (INVALID_SYNC) |
-| 82 | Unknown role ID | context roles: { user: ['nonexistent'] } | validation error: UNKNOWN_ROLE |
-| 83 | Aggregation-only query (`columns: []`) | orders columns: [], SUM(total) | correct `SELECT SUM(total) FROM orders` per dialect |
-| 84 | `columns: undefined` + aggregations | orders columns: undefined, GROUP BY status, SUM(total) | default to groupBy columns only (not all allowed) |
-
-### Test Scenarios by Package
-
-Each scenario maps to the test directory that owns it. Some scenarios touch multiple phases but are assigned to their **primary concern**.
-
-#### `tests/init/` — init-time errors (ConfigError, ConnectionError, ProviderError)
-
-| # | Scenario | Error |
-|---|---|---|
-| 49 | Invalid apiName format | ConfigError: CONFIG_INVALID (INVALID_API_NAME) |
-| 50 | Duplicate apiName | ConfigError: CONFIG_INVALID (DUPLICATE_API_NAME) |
-| 51 | Invalid DB reference | ConfigError: CONFIG_INVALID (INVALID_REFERENCE) |
-| 52 | Invalid relation | ConfigError: CONFIG_INVALID (INVALID_RELATION) |
-| 80 | Multiple config errors | ConfigError: CONFIG_INVALID, errors[] with 3 issues |
-| 81 | Invalid sync reference | ConfigError: CONFIG_INVALID (INVALID_SYNC) |
-| 53 | Connection failed | ConnectionError: CONNECTION_FAILED |
-| 54 | Metadata provider fails | ProviderError: METADATA_LOAD_FAILED |
-| 55 | Role provider fails | ProviderError: ROLE_LOAD_FAILED |
-| 63 | Lazy connections | init with validateConnections: false |
-
-#### `tests/validation/` — input validation against metadata + roles
-
-| # | Scenario | Rule |
-|---|---|---|
-| 15 | No-access role | rule 3 — ACCESS_DENIED (table) |
-| 17 | Invalid table name | rule 1 — UNKNOWN_TABLE |
-| 18 | Invalid column name | rule 2 — UNKNOWN_COLUMN |
-| 32 | Invalid join (no relation) | rule 6 — INVALID_JOIN |
-| 34 | Multiple validation errors | multi-error collection |
-| 36 | Invalid limit/offset | rule 11 — INVALID_LIMIT |
-| 37 | byIds + aggregations | rule 10 — INVALID_BY_IDS |
-| 65 | Empty byIds | rule 10 — INVALID_BY_IDS |
-| 40 | Invalid GROUP BY | rule 7 — INVALID_GROUP_BY |
-| 41 | Invalid HAVING | rule 8 — INVALID_HAVING |
-| 42 | Invalid ORDER BY | rule 9 — INVALID_ORDER_BY |
-| 43 | Invalid EXISTS filter | rule 12 — INVALID_EXISTS |
-| 46 | Invalid filter operator | rule 5 — INVALID_FILTER |
-| 47 | Access denied on column | rule 4 — ACCESS_DENIED (column) |
-| 78 | Empty columns array (no aggregations) | rule 2 — UNKNOWN_COLUMN |
-| 82 | Unknown role ID | rule 13 — UNKNOWN_ROLE |
-
-#### `tests/access/` — role-based column trimming, masking, scope logic
-
-| # | Scenario | Focus |
-|---|---|---|
-| 13 | Admin role | all columns visible |
-| 14 | Tenant-user role | subset columns only |
-| 14b | Column masking | masking applied per role |
-| 14c | Multi-role within scope | union within scope |
-| 14d | Cross-scope restriction | intersection between scopes |
-| 14f | Omitted scope | no restriction from missing scope |
-| 16 | Column trimming on byIds | role intersection with byIds columns |
-| 38 | Columns omitted | undefined columns → all allowed for role |
-
-#### `tests/planner/` — strategy selection (P0–P4)
-
-| # | Scenario | Strategy |
-|---|---|---|
-| 1 | Single PG table | P1 — direct |
-| 2 | Join within same PG | P1 — direct |
-| 3 | Cross-PG, debezium available | P2 — materialized |
-| 4 | Cross-PG, no debezium | P3 — trino |
-| 5 | PG + CH, debezium available | P2 — materialized |
-| 6 | PG + CH, no debezium | P3 — trino |
-| 7 | PG + Iceberg | P3 or P2 |
-| 8 | By-ID with cache hit | P0 — cache |
-| 9 | By-ID cache miss | P1 — direct |
-| 10 | By-ID partial cache | P0 + P1 — cache + direct merge |
-| 11 | Freshness=realtime | skip P2, use P3 |
-| 12 | Freshness=hours | P2 — materialized |
-| 19 | Trino disabled | P4 — TRINO_DISABLED |
-| 33 | byIds + filters (cache skip) | P0 skipped → P1 |
-| 56 | No Trino catalog | P4 — NO_CATALOG |
-| 57 | Freshness unmet | P4 — FRESHNESS_UNMET |
-| 59 | Unreachable tables | P4 — UNREACHABLE_TABLES |
-| 64 | Multi-table join (3 tables) | P1 — direct (all pg-main) |
-| 79 | Single Iceberg table query | P1 via trino executor |
 
 #### `tests/generator/` — SQL generation per dialect
 
-| # | Scenario | SQL Feature |
-|---|---|---|
-| 20 | Aggregation query | GROUP BY + SUM |
-| 21 | Aggregation + join | cross-table GROUP BY |
-| 22 | HAVING clause | HAVING with aggregate |
-| 23 | DISTINCT query | SELECT DISTINCT |
-| 24 | Cross-table ORDER BY | qualified ORDER BY |
-| 25 | EXISTS filter | EXISTS subquery |
-| 26 | NOT EXISTS filter | NOT EXISTS subquery |
-| 27 | Nested EXISTS + filter group | EXISTS inside OR group |
-| 28 | OR filter group | OR clause |
-| 29 | Negated filter group | NOT (...) |
-| 30 | ILIKE filter | dialect-specific ILIKE |
-| 45 | is_null filter | IS NULL |
-| 66 | `in` filter | IN array param binding |
-| 67 | `not_in` filter | NOT IN |
-| 68 | `is_not_null` filter | IS NOT NULL |
-| 69 | Join-scoped filter | filter on QueryJoin.filters |
-| 70 | Deeply nested WHERE | 3-level nested AND/OR |
-| 71 | Mixed top-level filters | filter + group + exists combined |
-| 72 | Multiple HAVING conditions | two aggregate HAVING conditions |
-| 73 | HAVING with OR group | OR inside HAVING |
-| 74 | `like` filter | case-sensitive LIKE |
-| 75 | `not_like` filter | NOT LIKE |
-| 77 | Order by aggregation alias | ORDER BY aggregate alias |
-| 83 | Aggregation-only query (`columns: []`) | `SELECT SUM(total) FROM orders` — no regular columns |
-| 84 | `columns: undefined` + aggregations | default to groupBy columns only (not all allowed) |
+| # | Scenario | Input | SQL Feature |
+|---|---|---|---|
+| 20 | Aggregation query | orders GROUP BY status, SUM(total) | GROUP BY + SUM |
+| 21 | Aggregation + join | orders + products GROUP BY category | cross-table GROUP BY |
+| 22 | HAVING clause | orders GROUP BY status HAVING SUM(total) > 100 | HAVING with aggregate |
+| 23 | DISTINCT query | orders DISTINCT status | SELECT DISTINCT |
+| 24 | Cross-table ORDER BY | orders + products ORDER BY products.category | qualified ORDER BY |
+| 25 | EXISTS filter | orders WHERE EXISTS invoices(status='paid') | EXISTS subquery |
+| 26 | NOT EXISTS filter | users WHERE NOT EXISTS orders | NOT EXISTS subquery |
+| 27 | Nested EXISTS + filter group | orders WHERE (status='active' OR EXISTS invoices) | EXISTS inside OR group |
+| 28 | OR filter group | orders WHERE (status='active' OR total > 100) | OR clause |
+| 29 | Negated filter group | orders WHERE NOT (status='cancelled' AND total = 0) | NOT (...) |
+| 30 | ILIKE filter | users WHERE email ILIKE '%@example%' | dialect-specific ILIKE |
+| 45 | is_null filter | orders WHERE productId IS NULL | IS NULL |
+| 66 | `in` filter | orders WHERE status IN ('active','shipped') | IN array param binding |
+| 67 | `not_in` filter | orders WHERE status NOT IN ('cancelled') | NOT IN |
+| 68 | `is_not_null` filter | orders WHERE productId IS NOT NULL | IS NOT NULL |
+| 69 | Join-scoped filter | orders JOIN products, products.category = 'electronics' | filter on QueryJoin.filters |
+| 70 | Deeply nested WHERE | orders WHERE (status='active' OR (total > 100 AND ...)) | 3-level nested AND/OR |
+| 71 | Mixed top-level filters | orders WHERE status + group + exists combined | filter + group + exists |
+| 72 | Multiple HAVING conditions | orders GROUP BY status HAVING SUM > 100 AND COUNT > 5 | two aggregate HAVING conditions |
+| 73 | HAVING with OR group | orders HAVING (SUM(total) > 1000 OR AVG(total) > 200) | OR inside HAVING |
+| 74 | `like` filter | orders WHERE status LIKE 'act%' | case-sensitive LIKE |
+| 75 | `not_like` filter | orders WHERE status NOT LIKE '%cancel%' | NOT LIKE |
+| 77 | Order by aggregation alias | GROUP BY status, SUM(total) as totalSum, ORDER BY totalSum | ORDER BY aggregate alias |
+| 83 | Aggregation-only query (`columns: []`) | orders columns: [], SUM(total) | `SELECT SUM(total) FROM orders` |
+| 84 | `columns: undefined` + aggregations | orders columns: undefined, GROUP BY status, SUM(total) | groupBy columns only (not all) |
 
 #### `tests/cache/` — cache strategy + masking on cached data
 
-| # | Scenario | Focus |
-|---|---|---|
-| 35 | Masking on cached results | cache hit + masking applied |
+| # | Scenario | Input | Focus |
+|---|---|---|---|
+| 35 | Masking on cached results | users byIds=[1,2] (tenant-user) | cache → redis, email still masked |
 
 #### `tests/e2e/` — full pipeline integration
 
-| # | Scenario | Focus |
-|---|---|---|
-| 14e | Count mode | executeMode: 'count' |
-| 31 | SQL-only mode | executeMode: 'sql-only' |
-| 39 | Debug mode | debug: true → debugLog |
-| 44 | Executor missing | EXECUTOR_MISSING at execution |
-| 48 | Cache provider missing | CACHE_PROVIDER_MISSING at execution |
-| 58 | Query execution fails | QUERY_FAILED at execution |
-| 60 | Health check | healthCheck() per-provider status |
-| 61 | Hot-reload metadata | reloadMetadata() + query with new table |
-| 62 | Reload failure | reloadRoles() fails, old config preserved |
-| 76 | Count + groupBy ignored | count mode ignores groupBy/aggregations/having |
+| # | Scenario | Input | Focus |
+|---|---|---|---|
+| 14e | Count mode | orders (count) | returns count only |
+| 31 | SQL-only mode | orders (sql-only) | returns SqlResult with sql + params |
+| 39 | Debug mode | orders (debug: true) | result includes debugLog entries |
+| 44 | Executor missing | events (no ch-analytics executor) | ExecutionError: EXECUTOR_MISSING |
+| 48 | Cache provider missing | users byIds=[1] (no redis provider) | ExecutionError: CACHE_PROVIDER_MISSING |
+| 58 | Query execution fails | orders (executor throws at runtime) | ExecutionError: QUERY_FAILED (includes sql + params) |
+| 60 | Health check | all executors + cache providers | healthCheck() returns per-provider status |
+| 61 | Hot-reload metadata | reloadMetadata() with new table added | next query sees new table |
+| 62 | Reload failure | reloadRoles() with failing provider | ProviderError, old config preserved |
+| 76 | Count + groupBy ignored | orders GROUP BY status, SUM(total) (count mode) | groupBy/aggregations/having ignored, returns scalar count |
 
 ### Sample Column Definitions (orders table)
 
