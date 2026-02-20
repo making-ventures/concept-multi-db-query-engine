@@ -634,6 +634,7 @@ Given a query touching tables T1, T2, ... Tn:
 10. **ByIds validity** — `byIds` requires a non-empty array and a single-column primary key; cannot combine with `groupBy` or `aggregations`
 11. **Limit/Offset validity** — `limit` and `offset` must be non-negative integers when provided
 12. **Exists filter validity** — `QueryExistsFilter.table` must have a defined relation to the `from` table (or a joining table); role must allow access to the related table
+13. **Role existence** — all role IDs in `ExecutionContext.roles` must exist in loaded roles; unknown IDs are rejected with `UNKNOWN_ROLE`
 
 All validation errors are **collected, not thrown one at a time**. The system runs all applicable checks and throws a single `ValidationError` containing every issue found. This lets callers fix all problems at once instead of playing whack-a-mole.
 
@@ -651,7 +652,7 @@ class MultiDbError extends Error {
 class ConfigError extends MultiDbError {
   code: 'CONFIG_INVALID'              // always this code — individual issues are in `errors`
   errors: {
-    code: 'INVALID_API_NAME' | 'DUPLICATE_API_NAME' | 'INVALID_REFERENCE' | 'INVALID_RELATION'
+    code: 'INVALID_API_NAME' | 'DUPLICATE_API_NAME' | 'INVALID_REFERENCE' | 'INVALID_RELATION' | 'INVALID_SYNC'
     message: string
     details: { entity?: string; field?: string; expected?: string; actual?: string }
   }[]
@@ -665,7 +666,7 @@ class ConnectionError extends MultiDbError {
 class ValidationError extends MultiDbError {
   code: 'VALIDATION_FAILED'           // always this code — individual issues are in `errors`
   errors: {
-    code: 'UNKNOWN_TABLE' | 'UNKNOWN_COLUMN' | 'ACCESS_DENIED' | 'INVALID_FILTER' | 'INVALID_JOIN' | 'INVALID_GROUP_BY' | 'INVALID_HAVING' | 'INVALID_ORDER_BY' | 'INVALID_BY_IDS' | 'INVALID_LIMIT' | 'INVALID_EXISTS'
+    code: 'UNKNOWN_TABLE' | 'UNKNOWN_COLUMN' | 'UNKNOWN_ROLE' | 'ACCESS_DENIED' | 'INVALID_FILTER' | 'INVALID_JOIN' | 'INVALID_GROUP_BY' | 'INVALID_HAVING' | 'INVALID_ORDER_BY' | 'INVALID_BY_IDS' | 'INVALID_LIMIT' | 'INVALID_EXISTS'
     message: string
     details: { expected?: string; actual?: string; table?: string; column?: string; role?: string }
   }[]
@@ -696,7 +697,7 @@ class ProviderError extends MultiDbError {
 }
 ```
 
-`ConfigError` is thrown at init time and during `reloadMetadata()` — it collects **all** config issues (invalid apiNames, duplicate names, broken references) into a single error with an `errors[]` array, same philosophy as `ValidationError`. `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query — `details` is a discriminated union keyed by `code`, so each variant carries only its relevant fields. `ExecutionError` is thrown during SQL execution or cache access — `details` is a discriminated union keyed by `code` (`QUERY_FAILED` includes `sql` + `params`, `EXECUTOR_MISSING` includes `database`, `CACHE_PROVIDER_MISSING` includes `cacheId`). `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails — at init time or during `reloadMetadata()` / `reloadRoles()`. Both `ExecutionError` and `ProviderError` use ES2022 `Error.cause` to chain the original error instead of a custom field.
+`ConfigError` is thrown at init time and during `reloadMetadata()` — it collects **all** config issues (invalid apiNames, duplicate names, broken references, broken sync references) into a single error with an `errors[]` array, same philosophy as `ValidationError`. `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query — `details` is a discriminated union keyed by `code`, so each variant carries only its relevant fields. `ExecutionError` is thrown during SQL execution or cache access — `details` is a discriminated union keyed by `code` (`QUERY_FAILED` includes `sql` + `params`, `EXECUTOR_MISSING` includes `database`, `CACHE_PROVIDER_MISSING` includes `cacheId`). `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails — at init time or during `reloadMetadata()` / `reloadRoles()`. Both `ExecutionError` and `ProviderError` use ES2022 `Error.cause` to chain the original error instead of a custom field.
 
 ---
 
@@ -789,7 +790,7 @@ interface SqlParts {
   joins: JoinClause[]
   where?: WhereNode                   // recursive AND/OR tree (omit if no WHERE clause)
   groupBy: ColumnRef[]
-  having?: WhereNode                  // recursive AND/OR tree for HAVING (omit if no HAVING clause)
+  having?: HavingNode                 // recursive AND/OR tree for HAVING (omit if no HAVING clause); excludes EXISTS
   aggregations: AggregationClause[]
   orderBy: OrderByClause[]
   limit?: number
@@ -798,6 +799,15 @@ interface SqlParts {
 
 // Recursive WHERE tree — mirrors QueryFilterGroup at the physical level
 type WhereNode = WhereCondition | WhereGroup | WhereExists
+
+// HAVING tree — same as WhereNode but excludes EXISTS (EXISTS in HAVING is not valid SQL)
+type HavingNode = WhereCondition | HavingGroup
+
+interface HavingGroup {
+  logic: 'and' | 'or'
+  not?: boolean
+  conditions: HavingNode[]
+}
 
 interface WhereGroup {
   logic: 'and' | 'or'
@@ -815,7 +825,7 @@ interface WhereExists {
 }
 
 interface OrderByClause {
-  column: ColumnRef
+  column: ColumnRef | string           // ColumnRef for table columns; bare string for aggregation aliases (e.g. 'totalSum')
   direction: 'asc' | 'desc'
 }
 
@@ -1040,6 +1050,8 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 78 | Empty columns array | orders columns: [] | validation error: UNKNOWN_COLUMN |
 | 79 | Single Iceberg table query | ordersArchive | direct via trino executor (Trino dialect, single catalog) |
 | 80 | Multiple config errors | invalid apiName + duplicate + broken reference | ConfigError: CONFIG_INVALID, errors[] contains all 3 |
+| 81 | Invalid sync reference | ExternalSync references non-existent table/database | ConfigError: CONFIG_INVALID (INVALID_SYNC) |
+| 82 | Unknown role ID | context roles: { user: ['nonexistent'] } | validation error: UNKNOWN_ROLE |
 
 ### Test Scenarios by Package
 
@@ -1054,6 +1066,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 51 | Invalid DB reference | ConfigError: CONFIG_INVALID (INVALID_REFERENCE) |
 | 52 | Invalid relation | ConfigError: CONFIG_INVALID (INVALID_RELATION) |
 | 80 | Multiple config errors | ConfigError: CONFIG_INVALID, errors[] with 3 issues |
+| 81 | Invalid sync reference | ConfigError: CONFIG_INVALID (INVALID_SYNC) |
 | 53 | Connection failed | ConnectionError: CONNECTION_FAILED |
 | 54 | Metadata provider fails | ProviderError: METADATA_LOAD_FAILED |
 | 55 | Role provider fails | ProviderError: ROLE_LOAD_FAILED |
@@ -1078,6 +1091,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 46 | Invalid filter operator | rule 5 — INVALID_FILTER |
 | 47 | Access denied on column | rule 4 — ACCESS_DENIED (column) |
 | 78 | Empty columns array | rule 2 — UNKNOWN_COLUMN |
+| 82 | Unknown role ID | rule 13 — UNKNOWN_ROLE |
 
 #### `tests/access/` — role-based column trimming, masking, scope logic
 
