@@ -437,11 +437,11 @@ interface QueryDefinition {
   from: string                        // table apiName
   columns?: string[]                  // apiNames; undefined = all allowed for role
   distinct?: boolean                  // SELECT DISTINCT (default: false)
-  filters?: QueryFilter[]
+  filters?: (QueryFilter | QueryFilterGroup)[]  // implicit AND at top level; use QueryFilterGroup for OR / nested logic
   joins?: QueryJoin[]
   groupBy?: QueryGroupBy[]            // columns to group by
   aggregations?: QueryAggregation[]   // aggregate functions
-  having?: QueryFilter[]              // filters on aggregated values (applied after GROUP BY)
+  having?: (QueryFilter | QueryFilterGroup)[]   // filters on aggregated values (applied after GROUP BY)
                                       // column references aggregation aliases, not table columns
   limit?: number
   offset?: number
@@ -474,13 +474,18 @@ interface QueryJoin {
   table: string                       // related table apiName
   type?: 'inner' | 'left'            // default: 'left' (safe for nullable FKs)
   columns?: string[]                  // columns to select from joined table
-  filters?: QueryFilter[]            // filters on joined table
+  filters?: (QueryFilter | QueryFilterGroup)[]  // filters on joined table
 }
 
 interface QueryFilter {
   column: string                      // apiName
   operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'is_null' | 'is_not_null'
   value?: unknown                     // scalar for most operators; array for 'in'/'not_in'; omit for 'is_null'/'is_not_null'
+}
+
+interface QueryFilterGroup {
+  logic: 'and' | 'or'
+  conditions: (QueryFilter | QueryFilterGroup)[]  // recursive — supports arbitrary nesting
 }
 ```
 
@@ -608,7 +613,7 @@ Given a query touching tables T1, T2, ... Tn:
 2. **Column existence** — only columns defined in table metadata can be referenced
 3. **Role permission** — if a table is not in the role's `tables` list → access denied
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
-5. **Filter validity** — filter operators must be valid for the column type
+5. **Filter validity** — filter operators must be valid for the column type; filter groups are validated recursively (all nested conditions checked)
 6. **Join validity** — joined tables must have a defined relation in metadata
 7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database
 8. **Having validity** — `having` filters must reference aliases defined in `aggregations`
@@ -754,13 +759,21 @@ interface SqlParts {
   distinct?: boolean                  // SELECT DISTINCT
   from: TableRef
   joins: JoinClause[]
-  where: WhereCondition[]
+  where: WhereNode                    // recursive AND/OR tree
   groupBy: ColumnRef[]
-  having: WhereCondition[]            // filters on aggregated values
+  having: WhereNode                   // recursive AND/OR tree for HAVING
   aggregations: AggregationClause[]
   orderBy: OrderByClause[]
   limit?: number
   offset?: number
+}
+
+// Recursive WHERE tree — mirrors QueryFilterGroup at the physical level
+type WhereNode = WhereCondition | WhereGroup
+
+interface WhereGroup {
+  logic: 'and' | 'or'
+  conditions: WhereNode[]
 }
 
 interface OrderByClause {
@@ -1135,6 +1148,7 @@ const roles: RoleMeta[] = [
 | Debug logging | Structured entries per pipeline phase, opt-in via `debug: true` | Zero overhead when not debugging |
 | Validation | Strict — only metadata-defined entities | Fail fast with clear errors |
 | Join results | Flat denormalized rows (no nesting) | `limit` applies to DB rows; with one-to-many joins, `limit: 10` may yield fewer than 10 parent entities. Nesting would require a two-query approach (fetch parent IDs first, then children), breaking the single-query model. Callers can group results using `meta.columns[].fromTable` |
+| Filter logic | Recursive `QueryFilterGroup` with `and`/`or` | Top-level filters array is implicit AND; use `QueryFilterGroup` for OR or nested combinations. Mirrors to `WhereGroup` in `SqlParts` IR. Simple queries stay simple, complex logic is opt-in |
 | Imports | Absolute paths, no `../` | Clean, refactor-friendly |
 
 ---
@@ -1239,7 +1253,6 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 ## Open Items for Further Discussion
 
 - [ ] Builder pattern API on top of object literals?
-- [ ] Subquery / nested filter support?
 - [ ] Write operations (INSERT/UPDATE/DELETE) — future scope?
 - [ ] Connection pool configuration and lifecycle
 - [ ] Trino session properties for optimization
