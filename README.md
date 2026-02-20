@@ -257,6 +257,8 @@ interface MultiDb {
   reloadRoles(): Promise<void>        // re-calls RoleProvider.load(), rebuilds role map
 
   healthCheck(): Promise<HealthCheckResult>  // checks all executors + cache providers
+
+  close(): Promise<void>              // calls close() on all executors + cache providers
 }
 
 interface HealthCheckResult {
@@ -279,17 +281,6 @@ const multiDb = await createMultiDb({
 
 // Later, when external system signals config change:
 await multiDb.reloadMetadata()
-```
-
-### Module Return Type
-
-```ts
-interface MultiDb {
-  query<T = unknown>(input: {
-    definition: QueryDefinition
-    context: ExecutionContext
-  }): Promise<QueryResult<T>>
-}
 ```
 
 ### Executor & Cache Provider Interfaces
@@ -329,6 +320,9 @@ import { createRedisCache } from '@mkven/multi-db-cache-redis'
 
 // Returns Promise<MultiDb> — async because it loads providers and pings connections
 const multiDb = await createMultiDb({
+  // Optional: skip connectivity checks at startup (default: true)
+  // validateConnections: false,
+
   // Required: metadata and role providers
   metadataProvider: staticMetadata({
     databases: [...],
@@ -354,19 +348,18 @@ const multiDb = await createMultiDb({
 })
 ```
 
-At init time (`createMultiDb` is async):
-- Providers are called: `metadataProvider.load()` and `roleProvider.load()`
-- All apiNames are validated (format, reserved words, uniqueness)
-- Metadata is indexed into in-memory Maps for O(1) lookups:
+At init time (`createMultiDb` is async), steps execute in order:
+1. **Load providers** — `metadataProvider.load()` and `roleProvider.load()` (throws `ProviderError` on failure)
+2. **Validate** — all apiNames checked (format, reserved words, uniqueness) (throws `ConfigError` on failure)
+3. **Index** — metadata indexed into in-memory Maps for O(1) lookups:
   - `Map<apiName, TableMeta>` — table by apiName
   - `Map<tableId, Map<apiName, ColumnMeta>>` — column by table + apiName
   - `Map<roleId, RoleMeta>` — role by id
   - `Map<databaseId, DatabaseMeta>` — database by id
   - `Map<tableId, ExternalSync[]>` — syncs per table
   - `Map<tableId, CachedTableMeta>` — cache config per table
-- Database connectivity graph is built (for planner)
-- All executors and cache providers are **pinged** to verify connectivity (calls `ping()` on each). If any fail, a `ConnectionError` is thrown listing all unreachable providers. Disable with `validateConnections: false` for lazy connection scenarios
-- Configuration errors are thrown immediately
+4. **Build graph** — database connectivity graph is built (for planner)
+5. **Ping** — all executors and cache providers are pinged to verify connectivity (calls `ping()` on each). If any fail, a `ConnectionError` is thrown listing all unreachable providers. Disable with `validateConnections: false` for lazy connection scenarios
 
 ### Query Request (per call)
 
@@ -1167,7 +1160,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       │   └── context.ts       # ExecutionContext
 │   │       ├── metadata/
 │   │       │   ├── registry.ts      # MetadataRegistry — stores and indexes all metadata
-│   │       │   └── loader.ts        # abstracted loader interface
+│   │       │   └── providers.ts     # MetadataProvider / RoleProvider interfaces + static helpers
 │   │       ├── validation/
 │   │       │   ├── validator.ts     # query validation against metadata + role
 │   │       │   └── errors.ts        # typed validation errors
