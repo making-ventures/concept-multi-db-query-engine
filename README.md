@@ -249,6 +249,14 @@ interface MultiDb {
 
   reloadMetadata(): Promise<void>     // re-calls MetadataProvider.load(), rebuilds indexes
   reloadRoles(): Promise<void>        // re-calls RoleProvider.load(), rebuilds role map
+
+  healthCheck(): Promise<HealthCheckResult>  // checks all executors + cache providers
+}
+
+interface HealthCheckResult {
+  healthy: boolean                    // true only if ALL checks pass
+  executors: Record<string, { healthy: boolean; latencyMs: number; error?: string }>
+  cacheProviders: Record<string, { healthy: boolean; latencyMs: number; error?: string }>
 }
 ```
 
@@ -287,12 +295,14 @@ Each executor and cache provider must implement a minimal interface:
 // Implemented by each executor package (postgres, clickhouse, trino)
 interface DbExecutor {
   execute(sql: string, params: unknown[]): Promise<Record<string, unknown>[]>
+  ping(): Promise<void>              // lightweight connectivity check (e.g. SELECT 1)
   close(): Promise<void>
 }
 
 // Implemented by each cache provider package (redis)
 interface CacheProvider {
   getMany(keys: string[]): Promise<Map<string, Record<string, unknown> | null>>
+  ping(): Promise<void>              // lightweight connectivity check (e.g. Redis PING)
   close(): Promise<void>
 }
 ```
@@ -349,6 +359,7 @@ At init time:
   - `Map<tableId, ExternalSync[]>` — syncs per table
   - `Map<tableId, CachedTableMeta>` — cache config per table
 - Database connectivity graph is built (for planner)
+- All executors and cache providers are **pinged** to verify connectivity (calls `ping()` on each). If any fail, a `ConfigError` with code `CONNECTION_FAILED` is thrown. Disable with `validateConnections: false` for lazy connection scenarios
 - Configuration errors are thrown immediately
 
 ### Query Request (per call)
@@ -611,8 +622,8 @@ class MultiDbError extends Error {
 }
 
 class ConfigError extends MultiDbError {
-  code: 'INVALID_API_NAME' | 'DUPLICATE_API_NAME' | 'INVALID_REFERENCE' | 'INVALID_RELATION'
-  details: { entity?: string; field?: string; expected?: string; actual?: string }
+  code: 'INVALID_API_NAME' | 'DUPLICATE_API_NAME' | 'INVALID_REFERENCE' | 'INVALID_RELATION' | 'CONNECTION_FAILED'
+  details: { entity?: string; field?: string; expected?: string; actual?: string; unreachable?: string[] }
 }
 
 class ValidationError extends MultiDbError {
