@@ -727,7 +727,7 @@ All validation errors are **collected, not thrown one at a time**. The system ru
 
 \* `isNull` / `isNotNull` are valid on any type (including arrays) but only on columns with `nullable: true`.
 
-Comparison operators (`>`, `<`, `>=`, `<=`) are rejected on `uuid` and `boolean` — UUIDs have no meaningful ordering, booleans should use `=`/`!=`. `in`/`notIn` are rejected on `date`/`timestamp` — use range comparisons instead. `between`/`notBetween` follow the same type rules as `>=`/`<=` (orderable types only — excludes `uuid` and `boolean`); `notBetween` emits `NOT (col BETWEEN $1 AND $2)`. `like`/`ilike`/`contains`/`icontains`/`notContains`/`notIcontains`/`startsWith`/`istartsWith`/`endsWith`/`iendsWith` are string-only. `contains`/`icontains` map to `LIKE '%x%'` / `ILIKE '%x%'`; `notContains`/`notIcontains` map to `NOT LIKE '%x%'` / `NOT ILIKE '%x%'` — wildcard characters (`%` and `_`) in the value are escaped automatically. `startsWith`/`istartsWith` map to `LIKE 'x%'` / `ILIKE 'x%'`; `endsWith`/`iendsWith` map to `LIKE '%x'` / `ILIKE '%x'`. `levenshteinLte` is string-only — it matches rows where the Levenshtein edit distance between the column value and the target text is ≤ `maxDistance`. No index support in any dialect — always a full scan. PostgreSQL requires the `fuzzystrmatch` extension (`CREATE EXTENSION fuzzystrmatch`).
+Comparison operators (`>`, `<`, `>=`, `<=`) are rejected on `uuid` and `boolean` — UUIDs have no meaningful ordering, booleans should use `=`/`!=`. `in`/`notIn` are rejected on `date`/`timestamp` — use range comparisons instead. `between`/`notBetween` follow the same type rules as `>=`/`<=` (orderable types only — excludes `uuid` and `boolean`); `notBetween` negates the range check — Postgres/Trino: `col NOT BETWEEN`, ClickHouse: `NOT (col BETWEEN ...)` (see SQL Dialect Differences). `like`/`ilike`/`contains`/`icontains`/`notContains`/`notIcontains`/`startsWith`/`istartsWith`/`endsWith`/`iendsWith` are string-only. `contains`/`icontains` map to `LIKE '%x%'` / `ILIKE '%x%'`; `notContains`/`notIcontains` map to `NOT LIKE '%x%'` / `NOT ILIKE '%x%'` — wildcard characters (`%` and `_`) in the value are escaped automatically. `startsWith`/`istartsWith` map to `LIKE 'x%'` / `ILIKE 'x%'`; `endsWith`/`iendsWith` map to `LIKE '%x'` / `ILIKE '%x'`. `levenshteinLte` is string-only — it matches rows where the Levenshtein edit distance between the column value and the target text is ≤ `maxDistance`. No index support in any dialect — always a full scan. PostgreSQL requires the `fuzzystrmatch` extension (`CREATE EXTENSION fuzzystrmatch`).
 
 **Array operators** are valid only on array column types (`'string[]'`, `'int[]'`, etc.). All scalar operators (except `isNull`/`isNotNull`) are rejected on array columns. `arrayContains` checks if the array column contains a single element (value must match element type). `arrayContainsAll` checks if the array contains ALL given elements (value is a non-empty array). `arrayContainsAny` checks if the array contains ANY of the given elements (overlap check, value is a non-empty array). `arrayIsEmpty` / `arrayIsNotEmpty` check if the array has zero / non-zero elements — no value needed. Note: `arrayIsEmpty` is distinct from `isNull` — an empty array `[]` is not NULL. Array operators on a NULL column value follow SQL 3-valued logic — the result is NULL (treated as false in WHERE). `arrayIsEmpty` on a NULL column returns NULL, not true — use `isNull` to check for NULL arrays specifically.
 
@@ -1072,7 +1072,7 @@ interface WhereColumnCondition {
 // Range condition — for 'between' / 'notBetween' operators
 interface WhereBetween {
   column: ColumnRef
-  not?: boolean                       // when true, emits NOT (col BETWEEN ... AND ...) — used by 'notBetween' operator
+  not?: boolean                       // when true, negates the range — used by 'notBetween' operator; per-dialect form varies (see SQL Dialect Differences)
   fromParamIndex: number              // param index for lower bound
   toParamIndex: number                // param index for upper bound
 }
@@ -1271,6 +1271,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 198 | Array column in GROUP BY | orders GROUP BY priorities, COUNT(*) as cnt | rule 7 — INVALID_GROUP_BY (array columns rejected in GROUP BY) |
 | 199 | Array column in ORDER BY | orders ORDER BY priorities ASC | rule 9 — INVALID_ORDER_BY (array columns rejected in ORDER BY) |
 | 229 | `notIn` on date column | invoices WHERE dueDate notIn ['2024-06-01'] | rule 5 — INVALID_FILTER (`notIn` rejected on `date` type) |
+| 230 | `in` on timestamp column | orders WHERE createdAt IN ('2024-01-01T00:00:00Z') | rule 5 — INVALID_FILTER (`in` rejected on `timestamp` type) |
+| 231 | `between` on uuid column | orders WHERE id BETWEEN 'uuid1' AND 'uuid2' | rule 5 — INVALID_FILTER (`between` rejected on `uuid` — no meaningful ordering) |
 
 #### `packages/core/tests/init/` — init-time errors (ConnectionError, ProviderError)
 
@@ -1914,7 +1916,7 @@ This ensures both implementations behave identically — same results, same erro
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187, 190–192, 195, 198, 199, 229
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187, 190–192, 195, 198, 199, 229–231
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
