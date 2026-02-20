@@ -764,11 +764,11 @@ Name resolution produces two outputs:
 ```ts
 // Built during name resolution, used after execution to map results back
 interface ColumnMapping {
-  physicalName: string                // 'total_amount'
-  apiName: string                     // 'total'
-  tableAlias: string                  // 't0'
-  masked: boolean                     // apply masking after fetch
-  type: string                        // logical column type
+  physicalName: string                // 'total_amount'; for aggregations: same as alias (e.g. 'totalSum')
+  apiName: string                     // 'total'; for aggregations: the alias (e.g. 'totalSum')
+  tableAlias: string                  // 't0'; for aggregations: the source column's table alias (or from-table alias for count(*))
+  masked: boolean                     // apply masking after fetch (always false for aggregation aliases)
+  type: string                        // logical column type; for aggregations: inferred from fn (count → 'int', sum/avg/min/max → source column type)
   maskingFn?: 'email' | 'phone' | 'name' | 'uuid' | 'number' | 'date' | 'full'
                                       // which masking function to apply (from ColumnMeta)
 }
@@ -1067,6 +1067,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 77 | Order by aggregation alias | GROUP BY status, SUM(total) as totalSum, ORDER BY totalSum | ORDER BY aggregate alias |
 | 83 | Aggregation-only query (`columns: []`) | orders columns: [], SUM(total) | `SELECT SUM(total) FROM orders` |
 | 84 | `columns: undefined` + aggregations | orders columns: undefined, GROUP BY status, SUM(total) | groupBy columns only (not all) |
+| 85 | Join with `columns: []` | orders JOIN products (columns: []), GROUP BY products.category | join for groupBy only, no product columns in SELECT |
 
 #### `tests/cache/` — cache strategy + masking on cached data
 
