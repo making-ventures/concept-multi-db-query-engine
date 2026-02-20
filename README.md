@@ -436,7 +436,7 @@ const countResult = await multiDb.query({
 ```ts
 interface QueryDefinition {
   from: string                        // table apiName
-  columns?: string[]                  // apiNames; undefined = all allowed for role; empty array [] is rejected (use undefined for all)
+  columns?: string[]                  // apiNames; undefined = all allowed for role (but see aggregation-only note below); empty [] = aggregation-only query (no regular columns, only aggregation results); rejected if empty AND no aggregations
   distinct?: boolean                  // SELECT DISTINCT (default: false)
   filters?: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // implicit AND at top level; use QueryFilterGroup for OR / nested logic
   joins?: QueryJoin[]
@@ -575,7 +575,7 @@ interface DebugLogEntry {
 }
 ```
 
-When you request execution (`executeMode = 'execute'`), you get data back — no SQL. When you request SQL only (`executeMode = 'sql-only'`), you get SQL + params — no execution, no data. When you request count (`executeMode = 'count'`), you get just the row count — `columns`, `orderBy`, `limit`, `offset`, `distinct`, `groupBy`, and `aggregations` are ignored (always emits `SELECT COUNT(*) FROM ...`, never grouped counts); `meta.columns` is an empty array since no columns are selected. All modes include metadata. Debug log is included only when `debug: true`.
+When you request execution (`executeMode = 'execute'`), you get data back — no SQL. When you request SQL only (`executeMode = 'sql-only'`), you get SQL + params — no execution, no data. When you request count (`executeMode = 'count'`), you get just the row count — `columns`, `orderBy`, `limit`, `offset`, `distinct`, `groupBy`, `aggregations`, and `having` are all ignored (always emits `SELECT COUNT(*) FROM ...`, never grouped counts); `filters` and `joins` remain active (they affect which rows are counted); `meta.columns` is an empty array since no columns are selected. All modes include metadata. Debug log is included only when `debug: true`.
 
 In `sql-only` mode, masking cannot be applied (no data to mask). However, `meta.columns[].masked` still reports masking intent so the caller can apply masking themselves after execution.
 
@@ -623,7 +623,7 @@ Given a query touching tables T1, T2, ... Tn:
 ## Validation Rules
 
 1. **Table existence** — only tables defined in metadata can be queried
-2. **Column existence** — only columns defined in table metadata can be referenced; explicit empty `columns: []` is rejected (use `undefined` for all allowed)
+2. **Column existence** — only columns defined in table metadata can be referenced; explicit empty `columns: []` is only valid when `aggregations` is present (aggregation-only query, e.g. `SELECT SUM(total) FROM orders`); empty `columns: []` without aggregations is rejected. When `columns` is `undefined` and `aggregations` is present, the default is `groupBy` columns only (not all allowed columns) — this avoids rule 7 failures from ungrouped columns being added automatically
 3. **Role permission** — if a table is not in the role's `tables` list → access denied
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
 5. **Filter validity** — filter operators must be valid for the column type; filter groups and exists filters are validated recursively (all nested conditions checked)
@@ -709,7 +709,7 @@ All `apiName` values (tables and columns) must follow these rules:
 |---|---|
 | Format | `^[a-z][a-zA-Z0-9]*$` (camelCase) |
 | Length | 1–64 characters |
-| Reserved words | Cannot be: `from`, `select`, `where`, `limit`, `offset`, `order`, `group`, `join`, `null`, `true`, `false`, `and`, `or`, `not`, `in`, `like`, `as`, `on`, `by` |
+| Reserved words | Cannot be: `from`, `select`, `where`, `having`, `limit`, `offset`, `order`, `group`, `join`, `distinct`, `exists`, `null`, `true`, `false`, `and`, `or`, `not`, `in`, `like`, `as`, `on`, `by`, `asc`, `desc`, `count`, `sum`, `avg`, `min`, `max` |
 | Uniqueness | Table apiNames must be globally unique; column apiNames must be unique within their table |
 
 camelCase is natural in TypeScript and visually distinct from the snake_case used in physical databases — making it obvious which layer you're working in.
@@ -1090,7 +1090,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 43 | Invalid EXISTS filter | rule 12 — INVALID_EXISTS |
 | 46 | Invalid filter operator | rule 5 — INVALID_FILTER |
 | 47 | Access denied on column | rule 4 — ACCESS_DENIED (column) |
-| 78 | Empty columns array | rule 2 — UNKNOWN_COLUMN |
+| 78 | Empty columns array (no aggregations) | rule 2 — UNKNOWN_COLUMN |
 | 82 | Unknown role ID | rule 13 — UNKNOWN_ROLE |
 
 #### `tests/access/` — role-based column trimming, masking, scope logic
@@ -1157,6 +1157,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 74 | `like` filter | case-sensitive LIKE |
 | 75 | `not_like` filter | NOT LIKE |
 | 77 | Order by aggregation alias | ORDER BY aggregate alias |
+| 83 | Aggregation-only query (`columns: []`) | `SELECT SUM(total) FROM orders` — no regular columns |
 
 #### `tests/cache/` — cache strategy + masking on cached data
 
@@ -1177,7 +1178,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 60 | Health check | healthCheck() per-provider status |
 | 61 | Hot-reload metadata | reloadMetadata() + query with new table |
 | 62 | Reload failure | reloadRoles() fails, old config preserved |
-| 76 | Count + groupBy ignored | count mode ignores groupBy/aggregations |
+| 76 | Count + groupBy ignored | count mode ignores groupBy/aggregations/having |
 
 ### Sample Column Definitions (orders table)
 
