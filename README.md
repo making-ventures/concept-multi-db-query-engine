@@ -440,7 +440,7 @@ interface QueryDefinition {
   from: string                        // table apiName
   columns?: string[]                  // apiNames; undefined = all allowed for role (but see aggregation-only note below); empty [] = aggregation-only query (no regular columns, only aggregation results); rejected if empty AND no aggregations
   distinct?: boolean                  // SELECT DISTINCT (default: false)
-  filters?: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // implicit AND at top level; use QueryFilterGroup for OR / nested logic
+  filters?: (QueryFilter | QueryColumnFilter | QueryFilterGroup | QueryExistsFilter)[]  // implicit AND at top level; use QueryFilterGroup for OR / nested logic
   joins?: QueryJoin[]
   groupBy?: QueryGroupBy[]            // columns to group by
   aggregations?: QueryAggregation[]   // aggregate functions
@@ -477,26 +477,39 @@ interface QueryJoin {
   table: string                       // related table apiName
   type?: 'inner' | 'left'            // default: 'left' (safe for nullable FKs)
   columns?: string[]                  // columns to select from joined table; undefined = all allowed for role; [] = no columns (join used for filter/groupBy only)
-  filters?: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // filters on joined table
+  filters?: (QueryFilter | QueryColumnFilter | QueryFilterGroup | QueryExistsFilter)[]  // filters on joined table
 }
 
 interface QueryFilter {
   column: string                      // apiName (or aggregation alias when used in `having`)
-  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'ilike' | 'not_ilike' | 'is_null' | 'is_not_null' | 'levenshtein_lte'
+  operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'ilike' | 'not_ilike'
+           | 'is_null' | 'is_not_null' | 'between' | 'contains' | 'icontains' | 'starts_with' | 'istarts_with'
+           | 'levenshtein_lte'
   value?: unknown                     // scalar for most operators; array for 'in'/'not_in'; omit for 'is_null'/'is_not_null'
+                                      // for 'between': { from: unknown, to: unknown } (inclusive range)
                                       // for 'levenshtein_lte': { text: string, maxDistance: number }
+                                      // for 'contains'/'icontains'/'starts_with'/'istarts_with': plain string (no wildcards — added internally)
+}
+
+// Column-vs-column comparison — right side is another column, not a literal value
+interface QueryColumnFilter {
+  column: string                      // left column apiName
+  table?: string                      // left table apiName; omit for `from` table
+  operator: '=' | '!=' | '>' | '<' | '>=' | '<='  // only comparison operators (no pattern/null/function ops)
+  refColumn: string                   // right column apiName
+  refTable?: string                   // right table apiName; omit for `from` table
 }
 
 interface QueryFilterGroup {
   logic: 'and' | 'or'
   not?: boolean                       // default: false — when true, negates the entire group: NOT (c1 AND/OR c2 ...)
-  conditions: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // recursive — supports arbitrary nesting
+  conditions: (QueryFilter | QueryColumnFilter | QueryFilterGroup | QueryExistsFilter)[]  // recursive — supports arbitrary nesting
 }
 
 interface QueryExistsFilter {
   exists: boolean                     // true = EXISTS, false = NOT EXISTS
   table: string                       // related table apiName (relation resolved via metadata, same as joins)
-  filters?: (QueryFilter | QueryFilterGroup | QueryExistsFilter)[]  // optional conditions on the related table
+  filters?: (QueryFilter | QueryColumnFilter | QueryFilterGroup | QueryExistsFilter)[]  // optional conditions on the related table
 }
 ```
 
@@ -629,7 +642,7 @@ Given a query touching tables T1, T2, ... Tn:
 2. **Column existence** — only columns defined in table metadata can be referenced. When `columns` is `undefined` and `aggregations` is present, the default is `groupBy` columns only (not all allowed columns) — this avoids rule 7 failures from ungrouped columns being added automatically
 3. **Role permission** — if a table is not in the role's `tables` list → access denied
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
-5. **Filter validity** — filter operators must be valid for the column type (see table below); `is_null`/`is_not_null` additionally require `nullable: true`; filter groups and exists filters are validated recursively (all nested conditions checked)
+5. **Filter validity** — filter operators must be valid for the column type (see table below); `is_null`/`is_not_null` additionally require `nullable: true`; for `QueryColumnFilter`, both columns must exist, the role must allow both, and their types must be compatible (same type, or both orderable); filter groups and exists filters are validated recursively (all nested conditions checked)
 6. **Join validity** — joined tables must have a defined relation in metadata
 7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database
 8. **Having validity** — `having` filters must reference aliases defined in `aggregations`; `QueryExistsFilter` nested inside `having` groups is rejected (EXISTS in HAVING is not valid SQL)
@@ -652,12 +665,17 @@ All validation errors are **collected, not thrown one at a time**. The system ru
 | `in` `not_in` | ✓ | ✓ | ✓ | — | ✓ | — | — |
 | `like` `not_like` | ✓ | — | — | — | — | — | — |
 | `ilike` `not_ilike` | ✓ | — | — | — | — | — | — |
+| `between` | ✓ | ✓ | ✓ | — | — | ✓ | ✓ |
+| `contains` `icontains` | ✓ | — | — | — | — | — | — |
+| `starts_with` `istarts_with` | ✓ | — | — | — | — | — | — |
 | `is_null` `is_not_null` | ✓* | ✓* | ✓* | ✓* | ✓* | ✓* | ✓* |
 | `levenshtein_lte` | ✓ | — | — | — | — | — | — |
 
+`QueryColumnFilter` is not listed — it supports `=`, `!=`, `>`, `<`, `>=`, `<=` with the same type restrictions as those operators. Both columns must have compatible types.
+
 \* `is_null` / `is_not_null` are valid on any type but only on columns with `nullable: true`.
 
-Comparison operators (`>`, `<`, `>=`, `<=`) are rejected on `uuid` and `boolean` — UUIDs have no meaningful ordering, booleans should use `=`/`!=`. `in`/`not_in` are rejected on `date`/`timestamp` — use range comparisons instead. `like`/`ilike` are string-only. `levenshtein_lte` is string-only — it matches rows where the Levenshtein edit distance between the column value and the target text is ≤ `maxDistance`. No index support in any dialect — always a full scan. PostgreSQL requires the `fuzzystrmatch` extension (`CREATE EXTENSION fuzzystrmatch`).
+Comparison operators (`>`, `<`, `>=`, `<=`) are rejected on `uuid` and `boolean` — UUIDs have no meaningful ordering, booleans should use `=`/`!=`. `in`/`not_in` are rejected on `date`/`timestamp` — use range comparisons instead. `between` follows the same type rules as `>=`/`<=` (orderable types only — excludes `uuid` and `boolean`). `like`/`ilike`/`contains`/`icontains`/`starts_with`/`istarts_with` are string-only. `contains`/`icontains` map to `LIKE '%x%'` / `ILIKE '%x%'` — wildcard characters in the value are escaped automatically. `starts_with`/`istarts_with` map to `LIKE 'x%'` / `ILIKE 'x%'`. `levenshtein_lte` is string-only — it matches rows where the Levenshtein edit distance between the column value and the target text is ≤ `maxDistance`. No index support in any dialect — always a full scan. PostgreSQL requires the `fuzzystrmatch` extension (`CREATE EXTENSION fuzzystrmatch`).
 
 ---
 
@@ -766,6 +784,7 @@ This decouples the API contract from database schema evolution.
 | LIMIT/OFFSET | `LIMIT n OFFSET m` | `LIMIT n OFFSET m` | `LIMIT n OFFSET m` |
 | Case-insensitive LIKE | `ILIKE` | `ilike(col, pattern)` | `lower(col) LIKE lower(pattern)` |
 | Levenshtein distance | `levenshtein(col, $1) <= $2` | `editDistance(col, {p1:String}) <= {p2:UInt32}` | `levenshtein_distance(col, ?) <= ?` |
+| BETWEEN | `col BETWEEN $1 AND $2` | `col BETWEEN {p1} AND {p2}` | `col BETWEEN ? AND ?` |
 | Boolean | `true/false` | `1/0` | `true/false` |
 
 Each engine gets a `SqlDialect` implementation.
@@ -821,7 +840,7 @@ interface SqlParts {
 }
 
 // Recursive WHERE tree — mirrors QueryFilterGroup at the physical level
-type WhereNode = WhereCondition | WhereFunction | WhereGroup | WhereExists
+type WhereNode = WhereCondition | WhereColumnCondition | WhereBetween | WhereFunction | WhereGroup | WhereExists
 
 // Function-based condition — for operators that wrap the column in a function (e.g. levenshtein_lte)
 interface WhereFunction {
@@ -883,6 +902,20 @@ interface WhereCondition {
   operator: string                    // '=', 'ILIKE', 'ANY', etc. — string (not union) because dialects may emit operators beyond the public QueryFilter set
   paramIndex?: number                 // for parameterized values (mutually exclusive with `literal`)
   literal?: string                    // for IS NULL, IS NOT NULL (mutually exclusive with `paramIndex`)
+}
+
+// Column-vs-column condition — no parameters, both sides are column references
+interface WhereColumnCondition {
+  leftColumn: ColumnRef
+  operator: string                    // '=', '!=', '>', '<', '>=', '<='
+  rightColumn: ColumnRef
+}
+
+// Range condition — for 'between' operator
+interface WhereBetween {
+  column: ColumnRef
+  fromParamIndex: number              // param index for lower bound
+  toParamIndex: number                // param index for upper bound
 }
 
 interface AggregationClause {
@@ -1038,6 +1071,10 @@ Tests are split between packages. Validation package tests run without DB connec
 | 98 | Filter on joined non-existent column | orders JOIN products, filter: products.nonexistent = 'x' | rule 2 — UNKNOWN_COLUMN |
 | 107 | `is_null` on non-nullable | orders WHERE id IS NULL (id: nullable=false) | rule 5 — INVALID_FILTER |
 | 109 | `levenshtein_lte` on non-string | orders WHERE total levenshtein_lte { text: '100', maxDistance: 1 } | rule 5 — INVALID_FILTER (decimal column) |
+| 116 | `between` on boolean | orders WHERE status between { from: true, to: false } | rule 5 — INVALID_FILTER (boolean not orderable) |
+| 117 | `contains` on non-string | orders WHERE total contains '100' | rule 5 — INVALID_FILTER (decimal column) |
+| 118 | Column filter type mismatch | orders WHERE total(decimal) > status(string) | rule 5 — INVALID_FILTER (incompatible types) |
+| 119 | Column filter on denied column | orders WHERE internalNote > status (tenant-user) | rule 4 — ACCESS_DENIED (column in filter) |
 
 #### `packages/core/tests/init/` — init-time errors (ConnectionError, ProviderError)
 
@@ -1129,6 +1166,12 @@ Tests are split between packages. Validation package tests run without DB connec
 | 101 | `>=` / `<=` filters | orders WHERE total >= 100 AND total <= 500 | range comparison |
 | 102 | MIN/MAX aggregations | orders MIN(createdAt) as earliest, MAX(createdAt) as latest | MIN/MAX preserve source type (timestamp) |
 | 108 | `levenshtein_lte` filter | users WHERE lastName levenshtein_lte { text: 'smith', maxDistance: 2 } | PG: `levenshtein(col,$1)<=$2`, CH: `editDistance(col,{p1:String})<={p2:UInt32}`, Trino: `levenshtein_distance(col,?)<= ?` |
+| 110 | `between` filter | orders WHERE total BETWEEN 100 AND 500 | `col BETWEEN $1 AND $2` per dialect |
+| 111 | `contains` filter | users WHERE email contains 'example' | `LIKE '%example%'` (value auto-escaped) |
+| 112 | `icontains` filter | users WHERE email icontains 'EXAMPLE' | dialect-specific case-insensitive `LIKE '%example%'` |
+| 113 | `starts_with` filter | users WHERE email starts_with 'admin' | `LIKE 'admin%'` |
+| 114 | `istarts_with` filter | users WHERE email istarts_with 'ADMIN' | dialect-specific case-insensitive `LIKE 'ADMIN%'` |
+| 115 | Column-vs-column filter | orders WHERE total > discount (QueryColumnFilter) | `t0."total_amount" > t0."discount"` — no params |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 
@@ -1162,6 +1205,7 @@ const ordersColumns: ColumnMeta[] = [
   { apiName: 'productId',    physicalName: 'product_id',      type: 'uuid',      nullable: true },
   { apiName: 'regionId',     physicalName: 'region_id',       type: 'string',    nullable: false },
   { apiName: 'total',        physicalName: 'total_amount',    type: 'decimal',   nullable: false, maskingFn: 'number' },
+  { apiName: 'discount',     physicalName: 'discount',        type: 'decimal',   nullable: true },
   { apiName: 'status',       physicalName: 'order_status',    type: 'string',    nullable: false },
   { apiName: 'internalNote', physicalName: 'internal_note',   type: 'string',    nullable: true,  maskingFn: 'full' },
   { apiName: 'createdAt',    physicalName: 'created_at',      type: 'timestamp', nullable: false, maskingFn: 'date' },
@@ -1442,7 +1486,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–119
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1478,7 +1522,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── init/                # scenarios 53, 54, 55, 63
 │   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103
-│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108
+│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115
 │   │       ├── cache/               # scenario 35
 │   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105
 │   │
