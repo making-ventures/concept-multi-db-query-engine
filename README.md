@@ -649,8 +649,12 @@ class MultiDbError extends Error {
 }
 
 class ConfigError extends MultiDbError {
-  code: 'INVALID_API_NAME' | 'DUPLICATE_API_NAME' | 'INVALID_REFERENCE' | 'INVALID_RELATION'
-  details: { entity?: string; field?: string; expected?: string; actual?: string }
+  code: 'CONFIG_INVALID'              // always this code — individual issues are in `errors`
+  errors: {
+    code: 'INVALID_API_NAME' | 'DUPLICATE_API_NAME' | 'INVALID_REFERENCE' | 'INVALID_RELATION'
+    message: string
+    details: { entity?: string; field?: string; expected?: string; actual?: string }
+  }[]
 }
 
 class ConnectionError extends MultiDbError {
@@ -669,21 +673,30 @@ class ValidationError extends MultiDbError {
 
 class PlannerError extends MultiDbError {
   code: 'UNREACHABLE_TABLES' | 'TRINO_DISABLED' | 'NO_CATALOG' | 'FRESHNESS_UNMET'
-  details: { unreachableTables?: string[]; missingCatalogs?: string[]; requiredFreshness?: string; availableLag?: string }
+  details:
+    | { code: 'UNREACHABLE_TABLES'; tables: string[] }
+    | { code: 'TRINO_DISABLED' }       // no additional detail needed
+    | { code: 'NO_CATALOG'; databases: string[] }
+    | { code: 'FRESHNESS_UNMET'; requiredFreshness: string; availableLag: string }
 }
 
 class ExecutionError extends MultiDbError {
   code: 'EXECUTOR_MISSING' | 'CACHE_PROVIDER_MISSING' | 'QUERY_FAILED'
-  details: { database?: string; sql?: string; params?: unknown[]; originalError?: Error }
+  details:
+    | { code: 'EXECUTOR_MISSING'; database: string }        // DatabaseMeta.id
+    | { code: 'CACHE_PROVIDER_MISSING'; cacheId: string }   // CacheMeta.id
+    | { code: 'QUERY_FAILED'; database: string; sql: string; params: unknown[] }  // sql + params for debugging
+  cause?: Error                       // original error (uses ES2022 Error.cause)
 }
 
 class ProviderError extends MultiDbError {
   code: 'METADATA_LOAD_FAILED' | 'ROLE_LOAD_FAILED'
-  details: { provider: 'metadata' | 'role'; originalError?: Error }
+  details: { provider: 'metadata' | 'role' }
+  cause?: Error                       // original error from provider (uses ES2022 Error.cause)
 }
 ```
 
-`ConfigError` is thrown at init time and during `reloadMetadata()` (invalid apiNames, duplicate names, broken DB/table/relation references). `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query. `ExecutionError` is thrown during SQL execution or cache access — for `QUERY_FAILED`, the `sql` and `params` that caused the failure are included for debugging. `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails — at init time or during `reloadMetadata()` / `reloadRoles()` (wraps the original error).
+`ConfigError` is thrown at init time and during `reloadMetadata()` — it collects **all** config issues (invalid apiNames, duplicate names, broken references) into a single error with an `errors[]` array, same philosophy as `ValidationError`. `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query — `details` is a discriminated union keyed by `code`, so each variant carries only its relevant fields. `ExecutionError` is thrown during SQL execution or cache access — `details` is a discriminated union keyed by `code` (`QUERY_FAILED` includes `sql` + `params`, `EXECUTOR_MISSING` includes `database`, `CACHE_PROVIDER_MISSING` includes `cacheId`). `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails — at init time or during `reloadMetadata()` / `reloadRoles()`. Both `ExecutionError` and `ProviderError` use ES2022 `Error.cause` to chain the original error instead of a custom field.
 
 ---
 
@@ -995,10 +1008,10 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 46 | Invalid filter operator | orders WHERE id > 'some-uuid' (uuid type) | validation error: INVALID_FILTER |
 | 47 | Access denied on column | orders columns: [internalNote] (tenant-user) | validation error: ACCESS_DENIED |
 | 48 | Cache provider missing | users byIds=[1] (no redis provider registered) | ExecutionError: CACHE_PROVIDER_MISSING |
-| 49 | Invalid apiName format | table apiName 'Order_Items' (has underscore) | ConfigError: INVALID_API_NAME |
-| 50 | Duplicate apiName | two tables with apiName 'orders' | ConfigError: DUPLICATE_API_NAME |
-| 51 | Invalid DB reference | table references non-existent database 'pg-other' | ConfigError: INVALID_REFERENCE |
-| 52 | Invalid relation | relation references non-existent table 'invoiceLines' | ConfigError: INVALID_RELATION |
+| 49 | Invalid apiName format | table apiName 'Order_Items' (has underscore) | ConfigError: CONFIG_INVALID (INVALID_API_NAME) |
+| 50 | Duplicate apiName | two tables with apiName 'orders' | ConfigError: CONFIG_INVALID (DUPLICATE_API_NAME) |
+| 51 | Invalid DB reference | table references non-existent database 'pg-other' | ConfigError: CONFIG_INVALID (INVALID_REFERENCE) |
+| 52 | Invalid relation | relation references non-existent table 'invoiceLines' | ConfigError: CONFIG_INVALID (INVALID_RELATION) |
 | 53 | Connection failed | executor ping fails at init | ConnectionError: CONNECTION_FAILED |
 | 54 | Metadata provider fails | MetadataProvider.load() throws | ProviderError: METADATA_LOAD_FAILED |
 | 55 | Role provider fails | RoleProvider.load() throws | ProviderError: ROLE_LOAD_FAILED |
@@ -1026,6 +1039,7 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 77 | Order by aggregation alias | orders GROUP BY status, SUM(total) as totalSum, ORDER BY totalSum | correct ORDER BY alias per dialect |
 | 78 | Empty columns array | orders columns: [] | validation error: UNKNOWN_COLUMN |
 | 79 | Single Iceberg table query | ordersArchive | direct via trino executor (Trino dialect, single catalog) |
+| 80 | Multiple config errors | invalid apiName + duplicate + broken reference | ConfigError: CONFIG_INVALID, errors[] contains all 3 |
 
 ### Test Scenarios by Package
 
@@ -1035,10 +1049,11 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 
 | # | Scenario | Error |
 |---|---|---|
-| 49 | Invalid apiName format | ConfigError: INVALID_API_NAME |
-| 50 | Duplicate apiName | ConfigError: DUPLICATE_API_NAME |
-| 51 | Invalid DB reference | ConfigError: INVALID_REFERENCE |
-| 52 | Invalid relation | ConfigError: INVALID_RELATION |
+| 49 | Invalid apiName format | ConfigError: CONFIG_INVALID (INVALID_API_NAME) |
+| 50 | Duplicate apiName | ConfigError: CONFIG_INVALID (DUPLICATE_API_NAME) |
+| 51 | Invalid DB reference | ConfigError: CONFIG_INVALID (INVALID_REFERENCE) |
+| 52 | Invalid relation | ConfigError: CONFIG_INVALID (INVALID_RELATION) |
+| 80 | Multiple config errors | ConfigError: CONFIG_INVALID, errors[] with 3 issues |
 | 53 | Connection failed | ConnectionError: CONNECTION_FAILED |
 | 54 | Metadata provider fails | ProviderError: METADATA_LOAD_FAILED |
 | 55 | Role provider fails | ProviderError: ROLE_LOAD_FAILED |
