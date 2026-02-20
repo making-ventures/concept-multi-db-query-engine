@@ -1216,7 +1216,7 @@ Tests are split between packages. Validation package tests run without DB connec
 | 98 | Filter on joined non-existent column | orders JOIN products, filter: products.nonexistent = 'x' | rule 2 — UNKNOWN_COLUMN |
 | 107 | `isNull` on non-nullable | orders WHERE id IS NULL (id: nullable=false) | rule 5 — INVALID_FILTER |
 | 109 | `levenshteinLte` on non-string | orders WHERE total levenshteinLte { text: '100', maxDistance: 1 } | rule 5 — INVALID_FILTER (decimal column) |
-| 116 | `between` on boolean | orders WHERE status between { from: true, to: false } | rule 5 — INVALID_FILTER (boolean not orderable) |
+| 116 | `between` on boolean | orders WHERE isPaid between { from: true, to: false } | rule 5 — INVALID_FILTER (boolean not orderable) |
 | 117 | `contains` on non-string | orders WHERE total contains '100' | rule 5 — INVALID_FILTER (decimal column) |
 | 118 | Column filter type mismatch | orders WHERE total(decimal) > status(string) | rule 5 — INVALID_FILTER (incompatible types) |
 | 119 | Column filter on denied column | orders WHERE internalNote > status (tenant-user) | rule 4 — ACCESS_DENIED (column in filter) |
@@ -1247,6 +1247,9 @@ Tests are split between packages. Validation package tests run without DB connec
 | 179 | SUM on array column | events SUM(tags) as tagSum | rule 14 — INVALID_AGGREGATION: sum/avg/min/max rejected on array columns |
 | 180 | QueryColumnFilter on array column | events WHERE tags > status (tags is 'string[]') | rule 5 — array columns not allowed in QueryColumnFilter |
 | 187 | Null element in `arrayContainsAll` | products WHERE labels arrayContainsAll ['sale', null] | rule 5 — INVALID_VALUE: null elements rejected (same as `in`/`notIn`) |
+| 190 | Comparison on boolean | orders WHERE isPaid > true | rule 5 — INVALID_FILTER (comparison operators `>`, `<`, `>=`, `<=` rejected on boolean) |
+| 191 | `in` on boolean | orders WHERE isPaid IN (true, false) | rule 5 — INVALID_FILTER (`in`/`notIn` rejected on boolean) |
+| 192 | `in` on date | invoices WHERE dueDate IN ('2024-06-01') | rule 5 — INVALID_FILTER (`in`/`notIn` rejected on date type) |
 
 #### `packages/core/tests/init/` — init-time errors (ConnectionError, ProviderError)
 
@@ -1378,6 +1381,9 @@ Tests are split between packages. Validation package tests run without DB connec
 | 185 | `arrayIsNotEmpty` filter | products WHERE labels arrayIsNotEmpty | PG: `cardinality(t0."labels") > 0`, CH: `notEmpty(...)`, Trino: `cardinality(...) > 0` |
 | 186 | `isNull` on array column | events WHERE tags IS NULL (tags is 'string[]', nullable: true) | `t0."tags" IS NULL` — `isNull`/`isNotNull` valid on array columns (same syntax as scalars) |
 | 188 | `notBetween` in HAVING | orders GROUP BY status, HAVING SUM(total) NOT BETWEEN 0 AND 10 | `NOT ("totalSum" BETWEEN $N AND $N+1)` — uses `HavingBetween` IR with `not: true` |
+| 189 | `=` on boolean column | orders WHERE isPaid = true | PG: `t0."is_paid" = $1`, CH: `t0.\`is_paid\` = {p1:Bool}`, Trino: `t0."is_paid" = ?` |
+| 193 | `between` on int column | orders WHERE quantity BETWEEN 1 AND 10 | `t0."quantity" BETWEEN $1 AND $2` — int orderable type, same syntax as decimal |
+| 194 | `in` on int column | orders WHERE quantity IN (1, 5, 10) | PG: `t0."quantity" = ANY($1::integer[])` — int array cast; CH: `IN tuple(...)`, Trino: `IN (?, ?, ?)` |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 
@@ -1421,6 +1427,8 @@ const ordersColumns: ColumnMeta[] = [
   { apiName: 'status',       physicalName: 'order_status',    type: 'string',    nullable: false },
   { apiName: 'internalNote', physicalName: 'internal_note',   type: 'string',    nullable: true,  maskingFn: 'full' },
   { apiName: 'createdAt',    physicalName: 'created_at',      type: 'timestamp', nullable: false, maskingFn: 'date' },
+  { apiName: 'quantity',     physicalName: 'quantity',        type: 'int',       nullable: false },
+  { apiName: 'isPaid',       physicalName: 'is_paid',         type: 'boolean',   nullable: true },
 ]
 ```
 
@@ -1488,6 +1496,7 @@ const invoicesColumns: ColumnMeta[] = [
   { apiName: 'status',    physicalName: 'status',      type: 'string',    nullable: false },
   { apiName: 'issuedAt',  physicalName: 'issued_at',   type: 'timestamp', nullable: false },
   { apiName: 'paidAt',    physicalName: 'paid_at',     type: 'timestamp', nullable: true },
+  { apiName: 'dueDate',   physicalName: 'due_date',    type: 'date',      nullable: true },
 ]
 ```
 
@@ -1708,7 +1717,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187, 190–192
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1744,7 +1753,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── init/                # scenarios 53, 54, 55, 63
 │   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
-│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155–157, 160–164, 166, 181–186, 188
+│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155–157, 160–164, 166, 181–186, 188–189, 193, 194
 │   │       ├── cache/               # scenario 35
 │   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105, 131, 132, 152, 170–172
 │   │
