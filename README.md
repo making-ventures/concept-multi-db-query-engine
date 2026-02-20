@@ -688,9 +688,9 @@ Given a query touching tables T1, T2, ... Tn:
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
 5. **Filter validity** — filter operators must be valid for the column type (see table below); `isNull`/`isNotNull` additionally require `nullable: true`; malformed compound values (`between`/`notBetween` missing `to`, `between`/`notBetween` with `null` as `from` or `to`, `levenshteinLte` with non-integer or negative `maxDistance`, `in` with empty array) are rejected with `INVALID_VALUE`; `between`/`notBetween` with `null` bounds are rejected for the same reason as `in`/`notIn` NULL — SQL `BETWEEN NULL AND x` always yields false due to 3-valued logic; `in`/`notIn` additionally validate that all array elements match the column type (e.g. passing `['a','b']` on an `int` column → `INVALID_VALUE`); `between`/`notBetween` additionally validate that `from` and `to` values match the column type (e.g. `BETWEEN 'abc' AND 'xyz'` on a `decimal` column → `INVALID_VALUE`); `in`/`notIn` also reject `null` elements — SQL's `NOT IN (1, NULL)` always returns zero rows due to 3-valued logic, which is a major footgun; **array operators** (`arrayContains`, `arrayContainsAll`, `arrayContainsAny`, `arrayIsEmpty`, `arrayIsNotEmpty`) are only valid on array column types (e.g. `'string[]'`); `arrayContains` value must match the element type; `arrayContainsAll`/`arrayContainsAny` value must be a non-empty array with all elements matching the element type (same validation as `in`/`notIn` — includes element type check and null element rejection); conversely, all scalar operators (except `isNull`/`isNotNull`) are rejected on array columns; when `QueryFilter.table` is provided, the table must be the `from` table or one of the joined tables — referencing a non-joined table is rejected; for `QueryColumnFilter`, both columns must exist, the role must allow both, and their types must be compatible (same type, or both orderable) — array columns are not allowed in `QueryColumnFilter`; filter groups and exists filters are validated recursively (all nested conditions checked)
 6. **Join validity** — joined tables must have a defined relation in metadata
-7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database. When `QueryGroupBy.table` is provided, the table must be the `from` table or one of the joined tables — same rule as filter `table` (rule 5)
+7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database. Array columns are rejected in `groupBy` — ClickHouse does not support `GROUP BY` on array columns, and behavior is inconsistent across dialects. When `QueryGroupBy.table` is provided, the table must be the `from` table or one of the joined tables — same rule as filter `table` (rule 5)
 8. **Having validity** — `having` filters must reference aliases defined in `aggregations`; `QueryFilter.table` is rejected inside `having` (HAVING operates on aggregation aliases, not table columns); `QueryColumnFilter` nested inside `having` groups is rejected (HAVING compares aliases, not table columns — column-vs-column comparison is not meaningful); `QueryExistsFilter` nested inside `having` groups is rejected (EXISTS in HAVING is not valid SQL); only comparison, range, and null-check operators are allowed — `=`, `!=`, `>`, `<`, `>=`, `<=`, `in`, `notIn`, `between`, `notBetween`, `isNull`, `isNotNull` (`isNull`/`isNotNull` do not require `nullable: true` in HAVING context — aggregation aliases have no column metadata; checking whether an aggregation returned NULL is always valid); pattern operators (`like`, `ilike`, `contains`, `startsWith`, `endsWith`, and their `not`/`i` variants), `levenshteinLte`, and array operators (`arrayContains`, `arrayContainsAll`, `arrayContainsAny`, `arrayIsEmpty`, `arrayIsNotEmpty`) are rejected — they operate on text values or array columns, not aggregated numbers
-9. **Order By validity** — `orderBy` must reference columns from `from` table, joined tables, or aggregation aliases defined in `aggregations`. When `QueryOrderBy.table` is provided, the table must be the `from` table or one of the joined tables — same rule as filter `table` (rule 5)
+9. **Order By validity** — `orderBy` must reference columns from `from` table, joined tables, or aggregation aliases defined in `aggregations`. Array columns are rejected in `orderBy` — arrays have no meaningful total ordering across dialects. When `QueryOrderBy.table` is provided, the table must be the `from` table or one of the joined tables — same rule as filter `table` (rule 5)
 10. **ByIds validity** — `byIds` requires a non-empty array and a single-column primary key; cannot combine with `groupBy` or `aggregations`; `byIds` + `joins` is valid — cache (P0) is skipped (cache stores single-table data) but direct DB (P1+) handles it normally (`WHERE pk = ANY($1)` with JOINs)
 11. **Limit/Offset validity** — `limit` and `offset` must be non-negative integers when provided; `offset` requires `limit` (offset without limit is rejected)
 12. **Exists filter validity** — `QueryExistsFilter.table` must have a defined relation to the `from` table (or a joining table); role must allow access to the related table; when `count` is provided, `value` must be a non-negative integer; `exists` is ignored when `count` is present (the count operator handles directionality); `exists` defaults to `true` when omitted. **Nested EXISTS:** `QueryExistsFilter.filters` may contain another `QueryExistsFilter` (e.g. orders EXISTS invoices WHERE EXISTS lineItems). The inner EXISTS resolves its `table` relation against the **outer** EXISTS's table (not the query's `from`) — the system walks the nesting chain to find the correct parent for relation lookup
@@ -1265,6 +1265,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 191 | `in` on boolean | orders WHERE isPaid IN (true, false) | rule 5 — INVALID_FILTER (`in`/`notIn` rejected on boolean) |
 | 192 | `in` on date | invoices WHERE dueDate IN ('2024-06-01') | rule 5 — INVALID_FILTER (`in`/`notIn` rejected on date type) |
 | 195 | `between` value type mismatch | orders WHERE total BETWEEN 'abc' AND 'xyz' (total is decimal) | rule 5 — INVALID_VALUE (`from`/`to` must match column type) |
+| 198 | Array column in GROUP BY | orders GROUP BY priorities, COUNT(*) as cnt | rule 7 — INVALID_GROUP_BY (array columns rejected in GROUP BY) |
+| 199 | Array column in ORDER BY | orders ORDER BY priorities ASC | rule 9 — INVALID_ORDER_BY (array columns rejected in ORDER BY) |
 
 #### `packages/core/tests/init/` — init-time errors (ConnectionError, ProviderError)
 
@@ -1401,6 +1403,14 @@ Tests are split between packages. Validation package tests run without DB connec
 | 194 | `in` on int column | orders WHERE quantity IN (1, 5, 10) | PG: `t0."quantity" = ANY($1::integer[])` — int array cast; CH: `IN tuple(...)`, Trino: `IN (?, ?, ?)` |
 | 196 | `_` wildcard escaping in `contains` | users WHERE email contains 'test_user' | `LIKE '%test\_user%'` — `_` in value auto-escaped (single-char wildcard) |
 | 197 | `isNull` in HAVING | orders GROUP BY status, HAVING SUM(discount) IS NULL | `HAVING "discountSum" IS NULL` — valid: checks if aggregation returned NULL (all values NULL); no `nullable` check needed on aliases |
+| 200 | `isNotNull` on array column | events WHERE tags IS NOT NULL (tags is 'string[]', nullable: true) | `t0."tags" IS NOT NULL` — symmetric to #186 |
+| 201 | COUNT on array column | events COUNT(tags) as tagCount | `COUNT(t0."tags")` — only valid aggregation on arrays; counts non-NULL values |
+| 202 | Array column in SELECT | products columns: [name, labels] | labels returned as JSON array — `SELECT t0."name", t0."labels"` |
+| 203 | `arrayContains` on `int[]` column | orders WHERE priorities arrayContains 1 | PG: `$1::integer = ANY(t0."priorities")`, CH: `has(t0.\`priorities\`, {p1:Int32})`, Trino: `contains(t0."priorities", ?)` |
+| 204 | `arrayContainsAll` on `int[]` column | orders WHERE priorities arrayContainsAll [1, 2, 3] | PG: `t0."priorities" @> $1::integer[]`, CH: `hasAll(t0.\`priorities\`, [{p1:Int32}, ...])`, Trino: `cardinality(array_except(ARRAY[?,?,?], t0."priorities")) = 0` |
+| 205 | Array filter in AND group | products WHERE (labels arrayContainsAny ['sale'] AND price > 10) | `(t0."labels" && $1::text[] AND t0."price" > $2)` — array filter inside `QueryFilterGroup` |
+| 206 | Array filter on joined table | orders JOIN products, filter: { column: 'labels', table: 'products', operator: 'arrayContainsAny', value: ['sale'] } | `t1."labels" && $1::text[]` — array filter using `table` qualifier on joined table column |
+| 207 | `arrayContainsAll` single element | products WHERE labels arrayContainsAll ['sale'] | PG: `t0."labels" @> $1::text[]` — single-element array is valid (same syntax, param is `['sale']`) |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 
@@ -1446,6 +1456,7 @@ const ordersColumns: ColumnMeta[] = [
   { apiName: 'createdAt',    physicalName: 'created_at',      type: 'timestamp', nullable: false, maskingFn: 'date' },
   { apiName: 'quantity',     physicalName: 'quantity',        type: 'int',       nullable: false },
   { apiName: 'isPaid',       physicalName: 'is_paid',         type: 'boolean',   nullable: true },
+  { apiName: 'priorities',   physicalName: 'priorities',      type: 'int[]',     nullable: true },    // integer[] in Postgres
 ]
 ```
 
@@ -1656,7 +1667,7 @@ const roles: RoleMeta[] = [
 | Executor timeout | Per-executor `timeoutMs` in factory config, no global default | Each DB has different performance profiles — Postgres: 30s, ClickHouse: 60s, Trino: 120s. Driver-level enforcement (`statement_timeout`, `max_execution_time`) is more reliable than `Promise.race` |
 | Concurrent safety | `query()` uses snapshot of metadata/roles; `reload*()` atomically swaps references | No locking needed — immutable config per query, atomic reference swap for reloads |
 | `close()` error handling | Attempt all providers, collect failures, throw aggregate error | Partial close would leak connections — always try all, report all failures |
-| Array columns | `ScalarColumnType` + `ArrayColumnType` union, 5 array operators, element type derived by stripping `[]` | All three backends (Postgres, ClickHouse, Trino/Iceberg) support arrays natively. Element type validation reuses `ScalarColumnType`. Array columns excluded from `QueryColumnFilter` and `sum`/`avg`/`min`/`max` aggregations |
+| Array columns | `ScalarColumnType` + `ArrayColumnType` union, 5 array operators, element type derived by stripping `[]` | All three backends (Postgres, ClickHouse, Trino/Iceberg) support arrays natively. Element type validation reuses `ScalarColumnType`. Array columns excluded from `QueryColumnFilter`, `sum`/`avg`/`min`/`max` aggregations, `groupBy`, and `orderBy` (dialect-inconsistent behavior) |
 
 ---
 
@@ -1734,7 +1745,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187, 190–192, 195
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187, 190–192, 195, 198, 199
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1770,7 +1781,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── init/                # scenarios 53, 54, 55, 63
 │   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
-│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155–157, 160–164, 166, 181–186, 188–189, 193, 194, 196, 197
+│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155–157, 160–164, 166, 181–186, 188–189, 193, 194, 196, 197, 200–207
 │   │       ├── cache/               # scenario 35
 │   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105, 131, 132, 152, 170–172
 │   │
