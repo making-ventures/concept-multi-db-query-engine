@@ -583,7 +583,7 @@ interface QueryResultMeta {
   }[]
   columns: {
     apiName: string                  // for aggregations: the alias (e.g. 'totalSum')
-    type: ColumnType                  // for aggregations: inferred from fn (count → 'int', sum/avg/min/max → source column type)
+    type: ColumnType                  // for aggregations: inferred from fn (count → 'int', avg → always 'decimal', sum/min/max → source column type)
     nullable: boolean
     fromTable: string                // table apiName; for aggregations: the source column's table (or `from` table for count(*))
     masked: boolean                  // whether this column was masked (always false for aggregation aliases)
@@ -608,6 +608,10 @@ When you request execution (`executeMode = 'execute'`), you get data back — no
 In `sql-only` mode, masking cannot be applied (no data to mask). However, `meta.columns[].masked` still reports masking intent so the caller can apply masking themselves after execution.
 
 **Masking and aggregations:** aggregation aliases are never masked. Masking applies to raw column values, not aggregated results. If `total` has `maskingFn: 'number'` and you query `SUM(total) as totalSum`, `totalSum` is returned unmasked — the aggregate collapses rows, so row-level masking is not meaningful.
+
+**NULL handling in aggregations:** SQL aggregation functions (`SUM`, `AVG`, `MIN`, `MAX`) ignore NULL values — only non-NULL rows contribute to the result. `COUNT(*)` counts all rows including NULLs; `COUNT(column)` ignores NULLs. If all values are NULL, `SUM`/`AVG`/`MIN`/`MAX` return NULL (the result column is `nullable: true` when the source column is nullable). `AVG` always returns `'decimal'` type regardless of the source column type — `AVG(int_column)` produces a fractional result in all SQL dialects.
+
+**DISTINCT and GROUP BY:** when both `distinct: true` and `groupBy` are present, `DISTINCT` is redundant — `GROUP BY` already deduplicates grouped columns. The system does not reject this combination (valid SQL), but the `DISTINCT` keyword has no effect on the result. Callers should prefer one or the other.
 
 ---
 
@@ -657,9 +661,9 @@ Given a query touching tables T1, T2, ... Tn:
 5. **Filter validity** — filter operators must be valid for the column type (see table below); `is_null`/`is_not_null` additionally require `nullable: true`; malformed compound values (`between`/`not_between` missing `to`, `levenshtein_lte` with negative `maxDistance`, `in` with empty array) are rejected with `INVALID_VALUE`; `in`/`not_in` additionally validate that all array elements match the column type (e.g. passing `['a','b']` on an `int` column → `INVALID_VALUE`); `in`/`not_in` also reject `null` elements — SQL's `NOT IN (1, NULL)` always returns zero rows due to 3-valued logic, which is a major footgun; when `QueryFilter.table` is provided, the table must be the `from` table or one of the joined tables — referencing a non-joined table is rejected; for `QueryColumnFilter`, both columns must exist, the role must allow both, and their types must be compatible (same type, or both orderable); filter groups and exists filters are validated recursively (all nested conditions checked)
 6. **Join validity** — joined tables must have a defined relation in metadata
 7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database
-8. **Having validity** — `having` filters must reference aliases defined in `aggregations`; `QueryFilter.table` is rejected inside `having` (HAVING operates on aggregation aliases, not table columns); `QueryColumnFilter` nested inside `having` groups is rejected (HAVING compares aliases, not table columns — column-vs-column comparison is not meaningful); `QueryExistsFilter` nested inside `having` groups is rejected (EXISTS in HAVING is not valid SQL)
+8. **Having validity** — `having` filters must reference aliases defined in `aggregations`; `QueryFilter.table` is rejected inside `having` (HAVING operates on aggregation aliases, not table columns); `QueryColumnFilter` nested inside `having` groups is rejected (HAVING compares aliases, not table columns — column-vs-column comparison is not meaningful); `QueryExistsFilter` nested inside `having` groups is rejected (EXISTS in HAVING is not valid SQL); only comparison, range, and null-check operators are allowed — `=`, `!=`, `>`, `<`, `>=`, `<=`, `in`, `not_in`, `between`, `not_between`, `is_null`, `is_not_null`; pattern operators (`like`, `ilike`, `contains`, `starts_with`, `ends_with`, and their `not_`/`i` variants) and `levenshtein_lte` are rejected — they operate on text values, not aggregated numbers
 9. **Order By validity** — `orderBy` must reference columns from `from` table, joined tables, or aggregation aliases defined in `aggregations`
-10. **ByIds validity** — `byIds` requires a non-empty array and a single-column primary key; cannot combine with `groupBy` or `aggregations`
+10. **ByIds validity** — `byIds` requires a non-empty array and a single-column primary key; cannot combine with `groupBy` or `aggregations`; `byIds` + `joins` is valid — cache (P0) is skipped (cache stores single-table data) but direct DB (P1+) handles it normally (`WHERE pk = ANY($1)` with JOINs)
 11. **Limit/Offset validity** — `limit` and `offset` must be non-negative integers when provided; `offset` requires `limit` (offset without limit is rejected)
 12. **Exists filter validity** — `QueryExistsFilter.table` must have a defined relation to the `from` table (or a joining table); role must allow access to the related table
 13. **Role existence** — all role IDs in `ExecutionContext.roles` must exist in loaded roles; unknown IDs are rejected with `UNKNOWN_ROLE`
@@ -858,7 +862,7 @@ interface ColumnMapping {
   apiName: string                     // 'total'; for aggregations: the alias (e.g. 'totalSum')
   tableAlias: string                  // 't0'; for aggregations: the source column's table alias (or from-table alias for count(*))
   masked: boolean                     // apply masking after fetch (always false for aggregation aliases)
-  type: ColumnType                    // logical column type; for aggregations: inferred from fn (count → 'int', sum/avg/min/max → source column type)
+  type: ColumnType                    // logical column type; for aggregations: inferred from fn (count → 'int', avg → always 'decimal', sum/min/max → source column type)
   maskingFn?: 'email' | 'phone' | 'name' | 'uuid' | 'number' | 'date' | 'full'
                                       // which masking function to apply (from ColumnMeta)
 }
@@ -899,8 +903,17 @@ interface WhereFunction {
   compareParamIndex: number           // param index for the comparison value (the max distance)
 }
 
-// HAVING tree — same as WhereNode but excludes EXISTS (EXISTS in HAVING is not valid SQL)
-type HavingNode = WhereCondition | HavingGroup
+// HAVING tree — same as WhereNode but excludes EXISTS, WhereColumnCondition, and WhereFunction
+// Only comparison + range + null operators are allowed (no pattern/function operators on aliases)
+type HavingNode = WhereCondition | HavingBetween | HavingGroup
+
+// Range condition on an aggregation alias — uses bare string, not ColumnRef
+interface HavingBetween {
+  alias: string                       // aggregation alias (e.g. 'totalSum')
+  not?: boolean                       // when true, emits NOT (alias BETWEEN ... AND ...)
+  fromParamIndex: number
+  toParamIndex: number
+}
 
 interface HavingGroup {
   logic: 'and' | 'or'
@@ -1232,6 +1245,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 127 | 3-table JOIN | orders + products + users (all pg-main) | 2 JOIN clauses in generated SQL |
 | 128 | `between` on timestamp | orders WHERE createdAt between { from: '2024-01-01', to: '2024-12-31' } | `t0."created_at" BETWEEN $1 AND $2` |
 | 129 | AVG aggregation | orders AVG(total) as avgTotal | `SELECT AVG(t0."total_amount") as "avgTotal"` |
+| 155 | HAVING with `between` | orders GROUP BY status, HAVING SUM(total) BETWEEN 100 AND 500 | `HAVING SUM(t0."total_amount") BETWEEN $N AND $N+1` — uses `HavingBetween` IR |
+| 156 | byIds + JOIN | orders byIds=[uuid1,uuid2] JOIN products | `SELECT ... FROM orders t0 LEFT JOIN products t1 ON ... WHERE t0."id" = ANY($1)` — cache skipped |
 | 133 | `ends_with` filter | users WHERE email ends_with '@example.com' | `LIKE '%@example.com'` |
 | 134 | `iends_with` filter | users WHERE email iends_with '@EXAMPLE.COM' | dialect-specific case-insensitive `LIKE '%@EXAMPLE.COM'` |
 | 135 | `not_between` filter | orders WHERE total NOT BETWEEN 0 AND 10 | `NOT (col BETWEEN $1 AND $2)` per dialect |
@@ -1251,6 +1266,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 146 | `not_in` on date column | orders WHERE createdAt not_in ['2024-01-01'] | `ValidationError` — rule 5: `not_in` rejected on `timestamp` type |
 | 150 | `in` with null element | orders WHERE status IN ('active', null) | `ValidationError` — `INVALID_VALUE`: null in `in`/`not_in` array rejected (NOT IN + NULL = 0 rows) |
 | 151 | QueryColumnFilter in HAVING group | orders GROUP BY status, HAVING group with QueryColumnFilter { column: 'totalSum', refColumn: 'avgTotal' } | `ValidationError` — HAVING rejects `QueryColumnFilter` (aliases, not table columns) |
+| 153 | `contains` operator in HAVING | orders GROUP BY status, HAVING { column: 'totalSum', operator: 'contains', value: '100' } | `ValidationError` — INVALID_HAVING: pattern operators rejected in HAVING |
+| 154 | `levenshtein_lte` in HAVING | orders GROUP BY status, HAVING { column: 'totalSum', operator: 'levenshtein_lte', value: { text: '100', maxDistance: 1 } } | `ValidationError` — INVALID_HAVING: function operators rejected in HAVING |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 
@@ -1502,6 +1519,8 @@ const roles: RoleMeta[] = [
 | Package | Purpose | Dependencies |
 |---|---|---|
 | `@mkven/multi-db-validation` | Types, error classes, config validation, query validation (rules 1–14), apiName validation | **zero** I/O deps |
+
+All error classes (including runtime ones like `ExecutionError`, `PlannerError`, `ConnectionError`) live in the validation package so that client code can use `instanceof` checks and access typed error fields without depending on the core package. The validation package is a type+error+validation-only package — it contains no I/O, no planner, no SQL generators.
 | `@mkven/multi-db` | Core: metadata registry, planner, SQL generators, name resolution, masking, debug logger | `@mkven/multi-db-validation` |
 | `@mkven/multi-db-executor-postgres` | Postgres connection + execution | `pg` |
 | `@mkven/multi-db-executor-clickhouse` | ClickHouse connection + execution | `@clickhouse/client` |
@@ -1569,7 +1588,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1605,7 +1624,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── init/                # scenarios 53, 54, 55, 63
 │   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
-│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149
+│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155, 156
 │   │       ├── cache/               # scenario 35
 │   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105, 131, 132, 152
 │   │
