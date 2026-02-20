@@ -165,8 +165,8 @@ interface CachedTableMeta {
 
 Access control is defined **per role**, not per table. Roles themselves are scope-agnostic — scoping is determined at query time via `ExecutionContext`. The effective permissions are computed as:
 
-1. **Within a scope** — UNION (most permissive). If one role allows columns A,B and another allows C,D, the effective set is A,B,C,D. This is natural: a user with multiple user-roles accumulates permissions.
-2. **Between scopes** — INTERSECTION (most restrictive). The effective permissions are the intersection of all scope unions.
+1. **Within a scope** — UNION (most permissive). If one role allows columns A,B and another allows C,D, the effective set is A,B,C,D. This is natural: a user with multiple user-roles accumulates permissions. **Masking within a scope is also unioned** — if *any* role in the scope masks a column, it stays masked. Masking is a restriction, not a permission, so it follows a most-restrictive rule even within a scope.
+2. **Between scopes** — INTERSECTION (most restrictive). The effective permissions are the intersection of all scope unions. Masking from any scope is preserved.
 
 This ensures that an admin user making a request through a service with restricted access only sees data the service is permitted to handle.
 
@@ -470,7 +470,7 @@ type QueryResult<T = unknown> = SqlResult | DataResult<T> | CountResult
 interface QueryResultMeta {
   strategy: 'direct' | 'cache' | 'materialized' | 'trino-cross-db'
   targetDatabase: string             // which DB was queried; for cache strategy: the CacheMeta.id (e.g. 'redis-main')
-  dialect: 'postgres' | 'clickhouse' | 'trino'  // iceberg is always queried via trino
+  dialect?: 'postgres' | 'clickhouse' | 'trino'  // omitted for cache-only hits; iceberg is always queried via trino
   tablesUsed: {
     tableId: string
     source: 'original' | 'materialized' | 'cache'
@@ -481,7 +481,7 @@ interface QueryResultMeta {
     apiName: string
     type: string
     nullable: boolean
-    fromTable: string                // which table this column came from
+    fromTable: string                // table apiName this column came from
     masked: boolean                  // whether this column was masked
   }[]
   timing: {
@@ -549,6 +549,31 @@ Given a query touching tables T1, T2, ... Tn:
 6. **Join validity** — joined tables must have a defined relation in metadata
 
 All validation errors are descriptive and include what was expected vs what was provided.
+
+### Error Handling
+
+All errors are thrown as typed exceptions (never returned in the result). Error types:
+
+```ts
+class MultiDbError extends Error {
+  code: string                        // machine-readable error code
+}
+
+class ValidationError extends MultiDbError {
+  code: 'UNKNOWN_TABLE' | 'UNKNOWN_COLUMN' | 'ACCESS_DENIED' | 'INVALID_FILTER' | 'INVALID_JOIN' | 'INVALID_API_NAME'
+  details: { expected?: string; actual?: string; table?: string; column?: string }
+}
+
+class PlannerError extends MultiDbError {
+  code: 'UNREACHABLE_TABLES' | 'TRINO_DISABLED' | 'NO_CATALOG'
+  details: { unreachableTables?: string[]; missingCatalogs?: string[] }
+}
+
+class ExecutionError extends MultiDbError {
+  code: 'EXECUTOR_MISSING' | 'CACHE_PROVIDER_MISSING' | 'QUERY_FAILED'
+  details: { database?: string; originalError?: Error }
+}
+```
 
 ---
 
@@ -699,10 +724,10 @@ No external SQL generation packages are used — the query shape is predictable 
 [access-control] Masking column 'total' for roles [tenant-user]
 [planning]    Tables needed: [orders(pg-main)]
 [planning]    All tables in 'pg-main' → strategy: DIRECT
-[name-res]    orders.total → public.orders.total_amount
-[name-res]    orders.tenantId → public.orders.tenant_id
-[sql-gen]     Dialect: postgres
-[sql-gen]     SELECT t0."id", t0."total_amount", ... FROM "public"."orders" t0 WHERE t0."tenant_id" = $1
+[name-resolution] orders.total → public.orders.total_amount
+[name-resolution] orders.tenantId → public.orders.tenant_id
+[sql-generation]  Dialect: postgres
+[sql-generation]  SELECT t0."id", t0."total_amount", ... FROM "public"."orders" t0 WHERE t0."tenant_id" = $1
 [execution]   Executing on pg-main → 42 rows, 8ms
 [execution]   Mapping results: total_amount → total (via ColumnMapping)
 ```
