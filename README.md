@@ -165,8 +165,8 @@ interface CachedTableMeta {
 
 Access control is defined **per role**, not per table. Roles themselves are scope-agnostic — scoping is determined at query time via `ExecutionContext`. The effective permissions are computed as:
 
-1. **Within a scope** — UNION (most permissive). If one role allows columns A,B and another allows C,D, the effective set is A,B,C,D. This is natural: a user with multiple user-roles accumulates permissions. **Masking within a scope is also unioned** — if *any* role in the scope masks a column, it stays masked. Masking is a restriction, not a permission, so it follows a most-restrictive rule even within a scope.
-2. **Between scopes** — INTERSECTION (most restrictive). The effective permissions are the intersection of all scope unions. Masking from any scope is preserved.
+1. **Within a scope** — UNION (most permissive). If one role allows columns A,B and another allows C,D, the effective set is A,B,C,D. This is natural: a user with multiple user-roles accumulates permissions. **Masking follows the same UNION rule** — if *any* role in the scope provides unmasked access to a column, the column is unmasked. A more privileged role overrides masking from a less privileged one.
+2. **Between scopes** — INTERSECTION (most restrictive). The effective permissions are the intersection of all scope unions. Masking from any scope is preserved — if one scope unmasks a column but another masks it, the column stays masked.
 
 This ensures that an admin user making a request through a service with restricted access only sees data the service is permitted to handle.
 
