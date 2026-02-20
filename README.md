@@ -1228,9 +1228,17 @@ Tests are split between packages. Validation package tests run without DB connec
 | 136 | `not_contains` filter | users WHERE email not_contains 'spam' | `NOT LIKE '%spam%'` |
 | 137 | `not_icontains` filter | users WHERE email not_icontains 'SPAM' | dialect-specific case-insensitive `NOT LIKE '%SPAM%'` |
 | 138 | Top-level filter on joined column | orders JOIN products, top-level filter: { column: 'category', table: 'products', operator: '=', value: 'electronics' } | `t1."category" = $1` in WHERE (same as QueryJoin.filters) |
+| 142 | INNER JOIN | orders INNER JOIN products | `INNER JOIN` clause (vs default LEFT) |
+| 147 | Multi-join with per-table filters | orders JOIN products (category='electronics') JOIN users (role='admin') | 2 JOINs + 2 WHERE conditions from joined tables |
+| 148 | Filter with `table` = `from` table | orders, filter: { column: 'status', table: 'orders', operator: '=', value: 'active' } | `t0."order_status" = $1` — explicit from-table reference, same as omitting `table` |
+| 149 | `ends_with` wildcard escaping | users WHERE email ends_with '100%off' | `LIKE '%100\%off'` — `%` in value auto-escaped |
 | 139 | Filter with `table` referencing non-joined table | users query, filter `{ column: 'status', table: 'orders', operator: '=' }` without joining orders | `ValidationError` — table 'orders' is not `from` and not in `joins` |
 | 140 | `in` with mismatched element types | orders WHERE status IN (1, 2) but status is 'string' | `ValidationError` — `INVALID_VALUE`: array elements must match column type |
 | 141 | `table` in having filter rejected | orders GROUP BY status, HAVING { column: 'totalSum', table: 'orders' } | `ValidationError` — `table` not allowed in `having` filters |
+| 143 | byIds with composite PK | orders byIds=[1,2] but table has composite PK [tenantId, id] | `ValidationError` — rule 10: byIds requires single-column primary key |
+| 144 | NOT in HAVING group | orders GROUP BY status, HAVING NOT (SUM(total) > 100 OR COUNT(*) > 5) | `NOT (HAVING_cond1 OR HAVING_cond2)` — negated HAVING group |
+| 145 | `not_between` malformed value | orders WHERE total not_between { from: 100 } (missing `to`) | `ValidationError` — `INVALID_VALUE` (malformed compound value, same as between) |
+| 146 | `not_in` on date column | orders WHERE createdAt not_in ['2024-01-01'] | `ValidationError` — rule 5: `not_in` rejected on `timestamp` type |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 
@@ -1548,7 +1556,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1584,7 +1592,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── init/                # scenarios 53, 54, 55, 63
 │   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
-│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138
+│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149
 │   │       ├── cache/               # scenario 35
 │   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105, 131, 132
 │   │
