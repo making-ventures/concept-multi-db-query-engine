@@ -971,7 +971,7 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 30 | ILIKE filter | users WHERE email ILIKE '%@example%' | correct case-insensitive LIKE per dialect |
 | 31 | SQL-only mode | orders (sql-only) | returns SqlResult with sql + params, no execution |
 | 32 | Invalid join (no relation) | orders + metrics | validation error: INVALID_JOIN |
-| 33 | byIds + filters (cache skip) | users byIds=[1,2] + filter status='active' | direct → pg-main (cache skipped) |
+| 33 | byIds + filters (cache skip) | users byIds=[1,2] + filter role='admin' | direct → pg-main (cache skipped) |
 | 34 | Multiple validation errors | from: 'nonexistent', column: 'bad', filter on 'missing' | errors[] contains all issues |
 | 35 | Masking on cached results | users byIds=[1,2] (tenant-user) | cache → redis, email still masked |
 | 36 | Invalid limit/offset | orders limit: -1 | validation error: INVALID_LIMIT |
@@ -984,6 +984,9 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 43 | Invalid EXISTS filter | orders EXISTS metrics (no relation) | validation error: INVALID_EXISTS |
 | 44 | Executor missing | events (execute mode, no ch-analytics executor) | ExecutionError: EXECUTOR_MISSING |
 | 45 | is_null filter | orders WHERE productId IS NULL | correct IS NULL per dialect |
+| 46 | Invalid filter operator | orders WHERE id > 'some-uuid' (uuid type) | validation error: INVALID_FILTER |
+| 47 | Access denied on column | orders columns: [internalNote] (tenant-user) | validation error: ACCESS_DENIED |
+| 48 | Cache provider missing | users byIds=[1] (no redis provider registered) | ExecutionError: CACHE_PROVIDER_MISSING |
 
 ### Sample Column Definitions (orders table)
 
@@ -1187,12 +1190,11 @@ const roles: RoleMeta[] = [
 | Language | TypeScript | Type-safe, wide ecosystem |
 | Query format | Typed object literals | Type-safe, IDE support, no parser |
 | Metadata source | Provider-based (always). Static helpers `staticMetadata()` / `staticRoles()` for simple cases | Uniform API — `reload` always works; no static/dynamic split |
-| Execution mode | SQL-only (`SqlResult`) or execution (`DataResult`) | Distinct return types per mode |
+| Execution mode | SQL-only (`SqlResult`), execution (`DataResult`), or count (`CountResult`) | Distinct return types per mode |
 | Freshness | Prefer original, allow specifying lag tolerance | Correctness by default, performance opt-in |
 | Access control | Scoped roles: UNION within scope, INTERSECTION between scopes | User accumulates perms, service restricts them |
 | SQL generation | Hand-rolled via `SqlParts` IR (internal, physical names only), no external packages | Full control over 3 divergent dialects, zero deps |
 | Pagination | Offset-based (`limit` + `offset`) | Simple, sufficient for most use cases |
-| Observability | OpenTelemetry | Industry standard, traces + metrics |
 | Name mapping | apiName ↔ physicalName on tables and columns | Decouples API from schema |
 | Cache | Redis synced by Debezium, no TTL | Always fresh, fast by-ID reads |
 | Debug logging | Structured entries per pipeline phase, opt-in via `debug: true` | Zero overhead when not debugging |
@@ -1313,3 +1315,4 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 - [ ] Cursor-based pagination as alternative to offset?
 - [ ] Custom masking functions beyond predefined set?
 - [ ] Nested/grouped results for one-to-many joins? (requires two-query approach: fetch parent IDs with limit, then fetch all children — significant complexity)
+- [ ] OpenTelemetry integration — spans per pipeline phase, traces + metrics
