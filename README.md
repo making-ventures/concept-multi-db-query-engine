@@ -266,7 +266,14 @@ interface MultiDb {
   healthCheck(): Promise<HealthCheckResult>  // checks all executors + cache providers
 
   close(): Promise<void>              // calls close() on all executors + cache providers
+                                      // Always attempts ALL providers even if some throw — collects errors
+                                      // into a single ConnectionError listing all failed close() calls.
+                                      // Subsequent query() calls throw ExecutionError (EXECUTOR_MISSING)
 }
+
+// Safe for concurrent use — query() captures a snapshot of the current metadata/roles
+// at call start. reloadMetadata() / reloadRoles() atomically replaces the internal
+// reference; in-flight queries see the config that was active when they started.
 
 interface HealthCheckResult {
   healthy: boolean                    // true only if ALL checks pass
@@ -352,10 +359,10 @@ const multiDb = await createMultiDb({
   // Optional: executors (only needed for executeMode = 'execute' | 'count')
   // Keys must match DatabaseMeta.id, except 'trino' which is a special key for the federation layer
   executors: {
-    'pg-main': createPostgresExecutor({ connectionString: '...' }),
-    'pg-tenant': createPostgresExecutor({ connectionString: '...' }),
-    'ch-analytics': createClickHouseExecutor({ url: '...' }),
-    'trino': createTrinoExecutor({ url: '...' }),     // special key — not a DatabaseMeta.id
+    'pg-main': createPostgresExecutor({ connectionString: '...', timeoutMs: 30_000 }),
+    'pg-tenant': createPostgresExecutor({ connectionString: '...', timeoutMs: 30_000 }),
+    'ch-analytics': createClickHouseExecutor({ url: '...', timeoutMs: 60_000 }),
+    'trino': createTrinoExecutor({ url: '...', timeoutMs: 120_000 }),  // special key — not a DatabaseMeta.id
   },
 
   // Optional: cache providers (keys must match CacheMeta.id)
@@ -377,6 +384,8 @@ At init time (`createMultiDb` is async), steps execute in order:
   - `Map<tableId, CachedTableMeta>` — cache config per table
 4. **Build graph** — database connectivity graph is built (for planner)
 5. **Ping** — all executors and cache providers are pinged to verify connectivity (calls `ping()` on each). If any fail, a `ConnectionError` is thrown listing all unreachable providers. Disable with `validateConnections: false` for lazy connection scenarios
+
+**Executor timeout:** Each executor factory accepts an optional `timeoutMs` parameter (milliseconds). The executor implementation enforces it via the driver's native mechanism (e.g. Postgres `statement_timeout`, ClickHouse `max_execution_time`). When exceeded, the executor throws an error that the core wraps as `ExecutionError: QUERY_TIMEOUT` with the configured `timeoutMs` value. Omitting `timeoutMs` means no timeout (the driver's default applies)
 
 ### Query Request (per call)
 
@@ -671,7 +680,7 @@ Given a query touching tables T1, T2, ... Tn:
 2. **Column existence** — only columns defined in table metadata can be referenced. When `columns` is `undefined` and `aggregations` is present, the default is `groupBy` columns only (not all allowed columns) — this avoids rule 7 failures from ungrouped columns being added automatically
 3. **Role permission** — if a table is not in the role's `tables` list → access denied
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
-5. **Filter validity** — filter operators must be valid for the column type (see table below); `isNull`/`isNotNull` additionally require `nullable: true`; malformed compound values (`between`/`notBetween` missing `to`, `levenshteinLte` with non-integer or negative `maxDistance`, `in` with empty array) are rejected with `INVALID_VALUE`; `in`/`notIn` additionally validate that all array elements match the column type (e.g. passing `['a','b']` on an `int` column → `INVALID_VALUE`); `in`/`notIn` also reject `null` elements — SQL's `NOT IN (1, NULL)` always returns zero rows due to 3-valued logic, which is a major footgun; when `QueryFilter.table` is provided, the table must be the `from` table or one of the joined tables — referencing a non-joined table is rejected; for `QueryColumnFilter`, both columns must exist, the role must allow both, and their types must be compatible (same type, or both orderable); filter groups and exists filters are validated recursively (all nested conditions checked)
+5. **Filter validity** — filter operators must be valid for the column type (see table below); `isNull`/`isNotNull` additionally require `nullable: true`; malformed compound values (`between`/`notBetween` missing `to`, `between`/`notBetween` with `null` as `from` or `to`, `levenshteinLte` with non-integer or negative `maxDistance`, `in` with empty array) are rejected with `INVALID_VALUE`; `between`/`notBetween` with `null` bounds are rejected for the same reason as `in`/`notIn` NULL — SQL `BETWEEN NULL AND x` always yields false due to 3-valued logic; `in`/`notIn` additionally validate that all array elements match the column type (e.g. passing `['a','b']` on an `int` column → `INVALID_VALUE`); `in`/`notIn` also reject `null` elements — SQL's `NOT IN (1, NULL)` always returns zero rows due to 3-valued logic, which is a major footgun; when `QueryFilter.table` is provided, the table must be the `from` table or one of the joined tables — referencing a non-joined table is rejected; for `QueryColumnFilter`, both columns must exist, the role must allow both, and their types must be compatible (same type, or both orderable); filter groups and exists filters are validated recursively (all nested conditions checked)
 6. **Join validity** — joined tables must have a defined relation in metadata
 7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database. When `QueryGroupBy.table` is provided, the table must be the `from` table or one of the joined tables — same rule as filter `table` (rule 5)
 8. **Having validity** — `having` filters must reference aliases defined in `aggregations`; `QueryFilter.table` is rejected inside `having` (HAVING operates on aggregation aliases, not table columns); `QueryColumnFilter` nested inside `having` groups is rejected (HAVING compares aliases, not table columns — column-vs-column comparison is not meaningful); `QueryExistsFilter` nested inside `having` groups is rejected (EXISTS in HAVING is not valid SQL); only comparison, range, and null-check operators are allowed — `=`, `!=`, `>`, `<`, `>=`, `<=`, `in`, `notIn`, `between`, `notBetween`, `isNull`, `isNotNull`; pattern operators (`like`, `ilike`, `contains`, `startsWith`, `endsWith`, and their `not`/`i` variants) and `levenshteinLte` are rejected — they operate on text values, not aggregated numbers
@@ -856,6 +865,17 @@ This decouples the API contract from database schema evolution.
 | Counted subquery | `(SELECT COUNT(*) FROM ... WHERE ...) >= $N` | `(SELECT COUNT(*) FROM ... WHERE ...) >= {pN:UInt64}` | `(SELECT COUNT(*) FROM ... WHERE ...) >= ?` |
 
 **Performance note — counted subqueries:** `COUNT(*)` scans all matching rows even when only a threshold is needed. For `>= N` / `> N` comparisons, the system can optimize by adding `LIMIT N` inside the subquery: `(SELECT COUNT(*) FROM (SELECT 1 FROM ... WHERE ... LIMIT N)) >= N`. This short-circuits counting once the threshold is reached. Not applied for `=` / `!=` / `<` / `<=` (which need the exact count). The optimization is per-dialect and transparent to the caller.
+
+**Postgres `in`/`notIn` type mapping:** The `= ANY($1::type[])` syntax requires an explicit array type cast. The system maps `ColumnType` → SQL type:
+
+| ColumnType | Postgres SQL Type | Array Cast |
+|---|---|---|
+| `string` | `text` | `$1::text[]` |
+| `int` | `integer` | `$1::integer[]` |
+| `decimal` | `numeric` | `$1::numeric[]` |
+| `uuid` | `uuid` | `$1::uuid[]` |
+
+Only types that support `in`/`notIn` are listed (`boolean`, `date`, `timestamp` are rejected by rule 5). ClickHouse and Trino expand values inline and don't need type casts.
 
 Each engine gets a `SqlDialect` implementation.
 
@@ -1187,6 +1207,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 154 | `levenshteinLte` in HAVING | orders GROUP BY status, HAVING { column: 'totalSum', operator: 'levenshteinLte', value: { text: '100', maxDistance: 1 } } | rule 8 — INVALID_HAVING: function operators rejected in HAVING |
 | 165 | Nested EXISTS | orders EXISTS(invoices WHERE EXISTS(users WHERE role='admin')) | rule 12 — inner EXISTS resolves `users` relation against `invoices` (outer EXISTS table), not `orders` |
 | 167 | `levenshteinLte` fractional maxDistance | users WHERE lastName levenshteinLte { text: 'x', maxDistance: 1.5 } | rule 5 — INVALID_VALUE (maxDistance must be non-negative integer) |
+| 168 | `between` with null `from` | orders WHERE total between { from: null, to: 100 } | rule 5 — INVALID_VALUE (`from`/`to` must not be null — SQL BETWEEN NULL always false) |
+| 169 | `notBetween` with null `to` | orders WHERE total notBetween { from: 0, to: null } | rule 5 — INVALID_VALUE (same rationale as `between` null rejection) |
 
 #### `packages/core/tests/init/` — init-time errors (ConnectionError, ProviderError)
 
@@ -1336,6 +1358,9 @@ Tests are split between packages. Validation package tests run without DB connec
 | 62 | Reload failure | reloadRoles() with failing provider | ProviderError, old config preserved |
 | 76 | Count + groupBy ignored | orders GROUP BY status, SUM(total) (count mode) | groupBy/aggregations/having ignored, returns scalar count |
 | 105 | close() lifecycle | call multiDb.close() | all executors + cache providers closed; subsequent queries throw `ExecutionError` (`EXECUTOR_MISSING`) — the executor is no longer available |
+| 170 | close() partial failure | 2 executors, 1 cache; executor pg-tenant close() throws | all 3 close() calls attempted; thrown error lists pg-tenant failure; subsequent queries throw EXECUTOR_MISSING |
+| 171 | Reload during in-flight query | `reloadMetadata()` called while `query()` is executing | in-flight query uses old config (snapshot); next query sees new config |
+| 172 | Executor timeout enforcement | orders query with pg-main timeoutMs: 100, slow query | `ExecutionError: QUERY_TIMEOUT` with `timeoutMs: 100` |
 
 ### Sample Column Definitions (orders table)
 
@@ -1555,6 +1580,9 @@ const roles: RoleMeta[] = [
 | Filter table qualifier | Optional `table?` on `QueryFilter` | Allows filtering on joined-table columns at top level without using `QueryJoin.filters`. Resolves ambiguity when `from` and joined tables share a column apiName |
 | Imports | Absolute paths, no `../` | Clean, refactor-friendly |
 | Column disambiguation | Qualified apiNames in result rows: `orders.id`, `products.id` when join produces collisions | Flat rows use `Record<string, unknown>` — keys must be unique. When the `from` table and a joined table share a column apiName (e.g. both have `id`), the result row qualifies colliding keys with `{tableApiName}.{columnApiName}`. Non-colliding columns keep their bare apiName. `meta.columns[].apiName` reflects the actual key used in the result row (qualified if colliding). SQL generation aliases columns via `AS "orders__id"` / `AS "products__id"` internally, then ColumnMapping translates to the qualified apiName |
+| Executor timeout | Per-executor `timeoutMs` in factory config, no global default | Each DB has different performance profiles — Postgres: 30s, ClickHouse: 60s, Trino: 120s. Driver-level enforcement (`statement_timeout`, `max_execution_time`) is more reliable than `Promise.race` |
+| Concurrent safety | `query()` uses snapshot of metadata/roles; `reload*()` atomically swaps references | No locking needed — immutable config per query, atomic reference swap for reloads |
+| `close()` error handling | Attempt all providers, collect failures, throw aggregate error | Partial close would leak connections — always try all, report all failures |
 
 ---
 
@@ -1632,7 +1660,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1670,7 +1698,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
 │   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155–157, 160–164, 166
 │   │       ├── cache/               # scenario 35
-│   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105, 131, 132, 152
+│   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105, 131, 132, 152, 170–172
 │   │
 │   ├── executor-postgres/           # @mkven/multi-db-executor-postgres
 │   │   ├── package.json
