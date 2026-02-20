@@ -653,7 +653,7 @@ class MultiDbError extends Error {
 class ConfigError extends MultiDbError {
   code: 'CONFIG_INVALID'              // always this code — individual issues are in `errors`
   errors: {
-    code: 'INVALID_API_NAME' | 'DUPLICATE_API_NAME' | 'INVALID_REFERENCE' | 'INVALID_RELATION' | 'INVALID_SYNC'
+    code: 'INVALID_API_NAME' | 'DUPLICATE_API_NAME' | 'INVALID_REFERENCE' | 'INVALID_RELATION' | 'INVALID_SYNC' | 'INVALID_CACHE'
     message: string
     details: { entity?: string; field?: string; expected?: string; actual?: string }
   }[]
@@ -669,7 +669,7 @@ class ValidationError extends MultiDbError {
   errors: {
     code: 'UNKNOWN_TABLE' | 'UNKNOWN_COLUMN' | 'UNKNOWN_ROLE' | 'ACCESS_DENIED' | 'INVALID_FILTER' | 'INVALID_JOIN' | 'INVALID_GROUP_BY' | 'INVALID_HAVING' | 'INVALID_ORDER_BY' | 'INVALID_BY_IDS' | 'INVALID_LIMIT' | 'INVALID_EXISTS' | 'INVALID_AGGREGATION'
     message: string
-    details: { expected?: string; actual?: string; table?: string; column?: string; role?: string; alias?: string }
+    details: { expected?: string; actual?: string; table?: string; column?: string; role?: string; alias?: string; operator?: string }
   }[]
 }
 
@@ -687,8 +687,7 @@ class ExecutionError extends MultiDbError {
   details:
     | { code: 'EXECUTOR_MISSING'; database: string }        // DatabaseMeta.id
     | { code: 'CACHE_PROVIDER_MISSING'; cacheId: string }   // CacheMeta.id
-    | { code: 'QUERY_FAILED'; database: string; sql: string; params: unknown[] }  // sql + params for debugging
-  cause?: Error                       // original error (uses ES2022 Error.cause)
+    | { code: 'QUERY_FAILED'; database: string; sql: string; params: unknown[]; cause?: Error }  // sql + params for debugging; cause = original DB error (ES2022 Error.cause)
 }
 
 class ProviderError extends MultiDbError {
@@ -700,7 +699,7 @@ class ProviderError extends MultiDbError {
 
 The top-level `Error.message` for multi-error types summarizes the count: e.g. `"Config invalid: 3 errors"` for `ConfigError`, `"Validation failed: 5 errors"` for `ValidationError`. Individual `errors[].message` provides per-issue detail.
 
-`ConfigError` is thrown at init time and during `reloadMetadata()` — it collects **all** config issues (invalid apiNames, duplicate names, broken references, broken sync references) into a single error with an `errors[]` array, same philosophy as `ValidationError`. `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). Each unreachable entry carries `cause?: Error` to preserve the original ping failure (stack trace, message). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query — `details` is a discriminated union keyed by `code`, so each variant carries only its relevant fields. `ExecutionError` is thrown during SQL execution or cache access — `details` is a discriminated union keyed by `code` (`QUERY_FAILED` includes `sql` + `params`, `EXECUTOR_MISSING` includes `database`, `CACHE_PROVIDER_MISSING` includes `cacheId`). `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails — at init time or during `reloadMetadata()` / `reloadRoles()`. Both `ExecutionError` and `ProviderError` use ES2022 `Error.cause` to chain the original error instead of a custom field.
+`ConfigError` is thrown at init time and during `reloadMetadata()` — it collects **all** config issues (invalid apiNames, duplicate names, broken references, broken relations, broken sync references, invalid cache configs) into a single error with an `errors[]` array, same philosophy as `ValidationError`. `ConnectionError` is thrown at init time when executor/cache pings fail — conceptually distinct from config validation (config is correct, infrastructure is unreachable). Each unreachable entry carries `cause?: Error` to preserve the original ping failure (stack trace, message). `ValidationError` is thrown per query — it collects **all** validation issues into a single error with an `errors[]` array, so callers can see every problem at once. `PlannerError` is thrown when no execution strategy can satisfy the query — `details` is a discriminated union keyed by `code`, so each variant carries only its relevant fields. `ExecutionError` is thrown during SQL execution or cache access — `details` is a discriminated union keyed by `code` (`QUERY_FAILED` includes `sql` + `params` + `cause`, `EXECUTOR_MISSING` includes `database`, `CACHE_PROVIDER_MISSING` includes `cacheId`). `ProviderError` is thrown when `MetadataProvider.load()` or `RoleProvider.load()` fails — at init time or during `reloadMetadata()` / `reloadRoles()`. Both `ExecutionError` and `ProviderError` use ES2022 `Error.cause` to chain the original error instead of a custom field.
 
 ---
 
@@ -978,6 +977,7 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 52 | Invalid relation | relation references non-existent table 'invoiceLines' | ConfigError: CONFIG_INVALID (INVALID_RELATION) |
 | 80 | Multiple config errors | invalid apiName + duplicate + broken reference | ConfigError: CONFIG_INVALID, errors[] contains all 3 |
 | 81 | Invalid sync reference | ExternalSync references non-existent table/database | ConfigError: CONFIG_INVALID (INVALID_SYNC) |
+| 89 | Invalid cache config | CacheMeta references non-existent table or invalid keyPattern placeholder | ConfigError: CONFIG_INVALID (INVALID_CACHE) |
 | 53 | Connection failed | executor ping fails at init | ConnectionError: CONNECTION_FAILED |
 | 54 | Metadata provider fails | MetadataProvider.load() throws | ProviderError: METADATA_LOAD_FAILED |
 | 55 | Role provider fails | RoleProvider.load() throws | ProviderError: ROLE_LOAD_FAILED |
