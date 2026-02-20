@@ -978,6 +978,12 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 37 | byIds + aggregations | users byIds + GROUP BY | validation error: INVALID_BY_IDS |
 | 38 | Columns omitted | orders (no columns specified, tenant-user) | returns only role-allowed columns |
 | 39 | Debug mode | orders (debug: true) | result includes debugLog entries |
+| 40 | Invalid GROUP BY | orders columns: [status, total], groupBy: [status] (total not grouped) | validation error: INVALID_GROUP_BY |
+| 41 | Invalid HAVING | orders having on non-existent alias | validation error: INVALID_HAVING |
+| 42 | Invalid ORDER BY | orders orderBy: products.category (products not joined) | validation error: INVALID_ORDER_BY |
+| 43 | Invalid EXISTS filter | orders EXISTS metrics (no relation) | validation error: INVALID_EXISTS |
+| 44 | Executor missing | events (execute mode, no ch-analytics executor) | ExecutionError: EXECUTOR_MISSING |
+| 45 | is_null filter | orders WHERE productId IS NULL | correct IS NULL per dialect |
 
 ### Sample Column Definitions (orders table)
 
