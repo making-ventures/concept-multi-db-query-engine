@@ -482,13 +482,16 @@ interface QueryJoin {
 
 interface QueryFilter {
   column: string                      // apiName (or aggregation alias when used in `having`)
+  table?: string                      // apiName of table; omit for `from` table. Allows filtering on joined table columns at top level
   operator: '=' | '!=' | '>' | '<' | '>=' | '<=' | 'in' | 'not_in' | 'like' | 'not_like' | 'ilike' | 'not_ilike'
-           | 'is_null' | 'is_not_null' | 'between' | 'contains' | 'icontains' | 'starts_with' | 'istarts_with'
+           | 'is_null' | 'is_not_null' | 'between' | 'not_between'
+           | 'contains' | 'icontains' | 'not_contains' | 'not_icontains'
+           | 'starts_with' | 'istarts_with' | 'ends_with' | 'iends_with'
            | 'levenshtein_lte'
   value?: unknown                     // scalar for most operators; array for 'in'/'not_in'; omit for 'is_null'/'is_not_null'
-                                      // for 'between': { from: unknown, to: unknown } (inclusive range)
+                                      // for 'between'/'not_between': { from: unknown, to: unknown } (inclusive range)
                                       // for 'levenshtein_lte': { text: string, maxDistance: number }
-                                      // for 'contains'/'icontains'/'starts_with'/'istarts_with': plain string (no wildcards — added internally)
+                                      // for 'contains'/'icontains'/'not_contains'/'not_icontains'/'starts_with'/'istarts_with'/'ends_with'/'iends_with': plain string (no wildcards — added internally)
 }
 
 // Column-vs-column comparison — right side is another column, not a literal value
@@ -642,7 +645,7 @@ Given a query touching tables T1, T2, ... Tn:
 2. **Column existence** — only columns defined in table metadata can be referenced. When `columns` is `undefined` and `aggregations` is present, the default is `groupBy` columns only (not all allowed columns) — this avoids rule 7 failures from ungrouped columns being added automatically
 3. **Role permission** — if a table is not in the role's `tables` list → access denied
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
-5. **Filter validity** — filter operators must be valid for the column type (see table below); `is_null`/`is_not_null` additionally require `nullable: true`; malformed compound values (`between` missing `to`, `levenshtein_lte` with negative `maxDistance`, `in` with empty array) are rejected with `INVALID_VALUE`; for `QueryColumnFilter`, both columns must exist, the role must allow both, and their types must be compatible (same type, or both orderable); filter groups and exists filters are validated recursively (all nested conditions checked)
+5. **Filter validity** — filter operators must be valid for the column type (see table below); `is_null`/`is_not_null` additionally require `nullable: true`; malformed compound values (`between`/`not_between` missing `to`, `levenshtein_lte` with negative `maxDistance`, `in` with empty array) are rejected with `INVALID_VALUE`; when `QueryFilter.table` is provided, the table must be the `from` table or one of the joined tables — referencing a non-joined table is rejected; for `QueryColumnFilter`, both columns must exist, the role must allow both, and their types must be compatible (same type, or both orderable); filter groups and exists filters are validated recursively (all nested conditions checked)
 6. **Join validity** — joined tables must have a defined relation in metadata
 7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database
 8. **Having validity** — `having` filters must reference aliases defined in `aggregations`; `QueryExistsFilter` nested inside `having` groups is rejected (EXISTS in HAVING is not valid SQL)
@@ -666,8 +669,11 @@ All validation errors are **collected, not thrown one at a time**. The system ru
 | `like` `not_like` | ✓ | — | — | — | — | — | — |
 | `ilike` `not_ilike` | ✓ | — | — | — | — | — | — |
 | `between` | ✓ | ✓ | ✓ | — | — | ✓ | ✓ |
+| `not_between` | ✓ | ✓ | ✓ | — | — | ✓ | ✓ |
 | `contains` `icontains` | ✓ | — | — | — | — | — | — |
+| `not_contains` `not_icontains` | ✓ | — | — | — | — | — | — |
 | `starts_with` `istarts_with` | ✓ | — | — | — | — | — | — |
+| `ends_with` `iends_with` | ✓ | — | — | — | — | — | — |
 | `is_null` `is_not_null` | ✓* | ✓* | ✓* | ✓* | ✓* | ✓* | ✓* |
 | `levenshtein_lte` | ✓ | — | — | — | — | — | — |
 
@@ -675,7 +681,9 @@ All validation errors are **collected, not thrown one at a time**. The system ru
 
 \* `is_null` / `is_not_null` are valid on any type but only on columns with `nullable: true`.
 
-Comparison operators (`>`, `<`, `>=`, `<=`) are rejected on `uuid` and `boolean` — UUIDs have no meaningful ordering, booleans should use `=`/`!=`. `in`/`not_in` are rejected on `date`/`timestamp` — use range comparisons instead. `between` follows the same type rules as `>=`/`<=` (orderable types only — excludes `uuid` and `boolean`). `like`/`ilike`/`contains`/`icontains`/`starts_with`/`istarts_with` are string-only. `contains`/`icontains` map to `LIKE '%x%'` / `ILIKE '%x%'` — wildcard characters in the value are escaped automatically. `starts_with`/`istarts_with` map to `LIKE 'x%'` / `ILIKE 'x%'`. `levenshtein_lte` is string-only — it matches rows where the Levenshtein edit distance between the column value and the target text is ≤ `maxDistance`. No index support in any dialect — always a full scan. PostgreSQL requires the `fuzzystrmatch` extension (`CREATE EXTENSION fuzzystrmatch`).
+Comparison operators (`>`, `<`, `>=`, `<=`) are rejected on `uuid` and `boolean` — UUIDs have no meaningful ordering, booleans should use `=`/`!=`. `in`/`not_in` are rejected on `date`/`timestamp` — use range comparisons instead. `between`/`not_between` follow the same type rules as `>=`/`<=` (orderable types only — excludes `uuid` and `boolean`); `not_between` emits `NOT (col BETWEEN $1 AND $2)`. `like`/`ilike`/`contains`/`icontains`/`not_contains`/`not_icontains`/`starts_with`/`istarts_with`/`ends_with`/`iends_with` are string-only. `contains`/`icontains` map to `LIKE '%x%'` / `ILIKE '%x%'`; `not_contains`/`not_icontains` map to `NOT LIKE '%x%'` / `NOT ILIKE '%x%'` — wildcard characters in the value are escaped automatically. `starts_with`/`istarts_with` map to `LIKE 'x%'` / `ILIKE 'x%'`; `ends_with`/`iends_with` map to `LIKE '%x'` / `ILIKE '%x'`. `levenshtein_lte` is string-only — it matches rows where the Levenshtein edit distance between the column value and the target text is ≤ `maxDistance`. No index support in any dialect — always a full scan. PostgreSQL requires the `fuzzystrmatch` extension (`CREATE EXTENSION fuzzystrmatch`).
+
+`QueryFilter.table` allows filtering on joined table columns directly in the top-level `filters[]` array, as an alternative to placing filters in `QueryJoin.filters`. Both approaches produce the same SQL (filter goes in WHERE, not ON). When `table` is omitted, the column is resolved against the `from` table. If the `from` table and a joined table share an apiName, the unqualified name resolves to the `from` table — use `table` to disambiguate.
 
 ---
 
@@ -814,6 +822,7 @@ This decouples the API contract from database schema evolution.
 | Case-insensitive LIKE | `ILIKE` | `ilike(col, pattern)` | `lower(col) LIKE lower(pattern)` |
 | Levenshtein distance | `levenshtein(col, $1) <= $2` | `editDistance(col, {p1:String}) <= {p2:UInt32}` | `levenshtein_distance(col, ?) <= ?` |
 | BETWEEN | `col BETWEEN $1 AND $2` | `col BETWEEN {p1} AND {p2}` | `col BETWEEN ? AND ?` |
+| NOT BETWEEN | `col NOT BETWEEN $1 AND $2` | `NOT (col BETWEEN {p1} AND {p2})` | `col NOT BETWEEN ? AND ?` |
 | Boolean | `true/false` | `1/0` | `true/false` |
 
 Each engine gets a `SqlDialect` implementation.
@@ -1212,6 +1221,13 @@ Tests are split between packages. Validation package tests run without DB connec
 | 127 | 3-table JOIN | orders + products + users (all pg-main) | 2 JOIN clauses in generated SQL |
 | 128 | `between` on timestamp | orders WHERE createdAt between { from: '2024-01-01', to: '2024-12-31' } | `t0."created_at" BETWEEN $1 AND $2` |
 | 129 | AVG aggregation | orders AVG(total) as avgTotal | `SELECT AVG(t0."total_amount") as "avgTotal"` |
+| 133 | `ends_with` filter | users WHERE email ends_with '@example.com' | `LIKE '%@example.com'` |
+| 134 | `iends_with` filter | users WHERE email iends_with '@EXAMPLE.COM' | dialect-specific case-insensitive `LIKE '%@EXAMPLE.COM'` |
+| 135 | `not_between` filter | orders WHERE total NOT BETWEEN 0 AND 10 | `NOT (col BETWEEN $1 AND $2)` per dialect |
+| 136 | `not_contains` filter | users WHERE email not_contains 'spam' | `NOT LIKE '%spam%'` |
+| 137 | `not_icontains` filter | users WHERE email not_icontains 'SPAM' | dialect-specific case-insensitive `NOT LIKE '%SPAM%'` |
+| 138 | Top-level filter on joined column | orders JOIN products, top-level filter: { column: 'category', table: 'products', operator: '=', value: 'electronics' } | `t1."category" = $1` in WHERE (same as QueryJoin.filters) |
+| 139 | Filter with `table` referencing non-joined table | users query, filter `{ column: 'status', table: 'orders', operator: '=' }` without joining orders | `ValidationError` — table 'orders' is not `from` and not in `joins` |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 
@@ -1452,6 +1468,7 @@ const roles: RoleMeta[] = [
 | Join results | Flat denormalized rows (no nesting) | `limit` applies to DB rows; with one-to-many joins, `limit: 10` may yield fewer than 10 parent entities. Nesting would require a two-query approach (fetch parent IDs first, then children), breaking the single-query model. Callers can group results using `meta.columns[].fromTable` |
 | Filter logic | Recursive `QueryFilterGroup` with `and`/`or` and optional `not` | Top-level filters array is implicit AND; use `QueryFilterGroup` for OR, nested combinations, or negation (`not: true` → `NOT (...)`). Mirrors to `WhereGroup` in `SqlParts` IR. Simple queries stay simple, complex logic is opt-in |
 | Exists filters | `QueryExistsFilter` with correlated subquery | Leverages existing relation metadata for `EXISTS`/`NOT EXISTS`. No implicit JOIN — keeps result set clean. Access control applied to the related table. Mirrors to `WhereExists` in `SqlParts` IR |
+| Filter table qualifier | Optional `table?` on `QueryFilter` | Allows filtering on joined-table columns at top level without using `QueryJoin.filters`. Resolves ambiguity when `from` and joined tables share a column apiName |
 | Imports | Absolute paths, no `../` | Clean, refactor-friendly |
 
 ---
@@ -1528,7 +1545,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
-│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123
+│   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139
 │   │
 │   ├── core/                        # @mkven/multi-db
 │   │   ├── package.json
@@ -1564,7 +1581,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 │   │       ├── init/                # scenarios 53, 54, 55, 63
 │   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
-│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129
+│   │       ├── generator/           # scenarios 20–30, 45, 66–77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138
 │   │       ├── cache/               # scenario 35
 │   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105, 131, 132
 │   │
