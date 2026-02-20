@@ -547,6 +547,7 @@ Given a query touching tables T1, T2, ... Tn:
 4. **Column permission** — if `allowedColumns` is a list and requested column is not in it → denied; if columns not specified in query, return only allowed ones
 5. **Filter validity** — filter operators must be valid for the column type
 6. **Join validity** — joined tables must have a defined relation in metadata
+7. **Group By validity** — if `groupBy` or `aggregations` are present, every column in `columns` that is not an aggregation alias must appear in `groupBy`. Prevents invalid SQL from reaching the database
 
 All validation errors are descriptive and include what was expected vs what was provided.
 
@@ -567,7 +568,7 @@ class ConfigError extends MultiDbError {
 }
 
 class ValidationError extends MultiDbError {
-  code: 'UNKNOWN_TABLE' | 'UNKNOWN_COLUMN' | 'ACCESS_DENIED' | 'INVALID_FILTER' | 'INVALID_JOIN'
+  code: 'UNKNOWN_TABLE' | 'UNKNOWN_COLUMN' | 'ACCESS_DENIED' | 'INVALID_FILTER' | 'INVALID_JOIN' | 'INVALID_GROUP_BY'
   details: { expected?: string; actual?: string; table?: string; column?: string; role?: string }
 }
 
