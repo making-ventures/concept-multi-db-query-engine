@@ -1005,6 +1005,14 @@ Roles have no `scope` field — the same role can be used in any scope via `Exec
 | 63 | Lazy connections | validateConnections: false | init succeeds, healthCheck detects issues |
 | 64 | Multi-table join (3 tables) | orders + products + users (all pg-main) | direct → pg-main, 2 JOINs |
 | 65 | Empty byIds | orders byIds=[] | validation error: INVALID_BY_IDS |
+| 66 | `in` filter | orders WHERE status IN ('active','shipped') | correct array param binding per dialect |
+| 67 | `not_in` filter | orders WHERE status NOT IN ('cancelled') | correct NOT IN per dialect |
+| 68 | `is_not_null` filter | orders WHERE productId IS NOT NULL | correct IS NOT NULL per dialect |
+| 69 | Join-scoped filter | orders JOIN products, products.category = 'electronics' (via QueryJoin.filters) | filter on joined table |
+| 70 | Deeply nested WHERE | orders WHERE (status='active' OR (total > 100 AND createdAt >= '2025-01-01')) | 3-level nesting |
+| 71 | Mixed top-level filters | orders WHERE status='active' AND (total > 50 OR total < 10) AND EXISTS invoices(status='paid') | filter + group + exists combined |
+| 72 | Multiple HAVING conditions | orders GROUP BY status HAVING SUM(total) > 100 AND COUNT(*) > 5 | two aggregate conditions |
+| 73 | HAVING with OR group | orders GROUP BY status HAVING (SUM(total) > 1000 OR AVG(total) > 200) | OR in HAVING |
 
 ### Test Scenarios by Package
 
@@ -1094,6 +1102,14 @@ Each scenario maps to the test directory that owns it. Some scenarios touch mult
 | 29 | Negated filter group | NOT (...) |
 | 30 | ILIKE filter | dialect-specific ILIKE |
 | 45 | is_null filter | IS NULL |
+| 66 | `in` filter | IN array param binding |
+| 67 | `not_in` filter | NOT IN |
+| 68 | `is_not_null` filter | IS NOT NULL |
+| 69 | Join-scoped filter | filter on QueryJoin.filters |
+| 70 | Deeply nested WHERE | 3-level nested AND/OR |
+| 71 | Mixed top-level filters | filter + group + exists combined |
+| 72 | Multiple HAVING conditions | two aggregate HAVING conditions |
+| 73 | HAVING with OR group | OR inside HAVING |
 
 #### `tests/cache/` — cache strategy + masking on cached data
 
