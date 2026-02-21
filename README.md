@@ -1503,6 +1503,9 @@ Tests are split between packages. Validation package tests run without DB connec
 | 223 | Access denied | restricted column (tenant-user) | both throw `ValidationError` with `ACCESS_DENIED` |
 | 224 | Count mode | orders (count) | both return `kind: 'count'` with same count |
 | 225 | SQL-only mode | orders (sql-only) | both return `kind: 'sql'`; SQL string may differ in formatting but params match |
+| 236 | Debug mode | orders debug: true | both return `debugLog` array with entries containing `timestamp`, `phase`, `message` |
+| 237 | Masking in meta | orders columns: [id, total] (tenant-user, total masked) | both report `meta.columns[].masked = true` for total, `false` for id |
+| 238 | byIds | orders byIds=[1,2] | both return `kind: 'data'` with columns present |
 
 ### Sample Column Definitions (orders table)
 
@@ -2002,7 +2005,7 @@ This ensures both implementations behave identically — same results, same erro
 │   │           └── queryContract.ts  # describeQueryContract — parameterized contract test suite
 │   │   └── tests/
 │   │       ├── client/              # scenarios 208–218, 226
-│   │       └── contract/            # scenarios 219–225
+│   │       └── contract/            # scenarios 219–225, 236–238
 │   │
 │   ├── executor-postgres/           # @mkven/multi-db-executor-postgres
 │   │   ├── package.json
