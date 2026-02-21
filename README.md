@@ -1491,6 +1491,10 @@ Tests are split between packages. Validation package tests run without DB connec
 | 217 | Health check via HTTP | GET /health → server returns HealthCheckResult | client returns typed `HealthCheckResult` with executor/cache status |
 | 218 | Custom fetch injection | `fetch: mockFetch` in config | client uses injected fetch; verifiable by asserting on mock |
 | 226 | PlannerError deserialization | POST /query → server returns 422 with PlannerError body | client throws `PlannerError` with `code: 'UNREACHABLE_TABLES'`, `instanceof` check passes |
+| 239 | Validate query (valid) | POST /validate/query with valid definition | returns `{ valid: true }` |
+| 240 | Validate query (invalid) | POST /validate/query with unknown table | throws `ValidationError` with `UNKNOWN_TABLE`, same `errors[]` format as /query |
+| 241 | Validate config (valid) | POST /validate/config with valid metadata + roles | returns `{ valid: true }` |
+| 242 | Validate config (invalid) | POST /validate/config with duplicate apiName | throws `ConfigError` with `DUPLICATE_API_NAME` |
 
 #### `packages/client/tests/contract/` — contract tests (same suite, both implementations)
 
@@ -1800,6 +1804,12 @@ The system defines a minimal HTTP API contract that any server wrapping `@mkven/
 |---|---|---|---|
 | `/query` | POST | `{ definition, context }` | `QueryResult` (JSON, discriminated by `kind`) |
 | `/health` | GET | — | `HealthCheckResult` |
+| `/validate/query` | POST | `{ definition, context }` | `{ valid: true }` |
+| `/validate/config` | POST | `{ metadata, roles }` | `{ valid: true }` |
+
+`/validate/query` runs all 14 validation rules (table/column existence, role permissions, filter/join/aggregation validity, etc.) **without executing** — no DB connections, no executors needed. Returns `{ valid: true }` on success, or throws `ValidationError` (400) with the same `errors[]` array as `/query`. This lets contract tests verify all validation behavior without a running database.
+
+`/validate/config` validates metadata + role configuration (apiName format, uniqueness, references, relations, syncs, caches). Returns `{ valid: true }` on success, or throws `ConfigError` (400). Useful for CI pipelines and config validation tooling.
 
 Error responses use HTTP status codes with the error's `toJSON()` body:
 
@@ -1836,6 +1846,16 @@ interface MultiDbClient {
   }): Promise<QueryResult<T>>
 
   healthCheck(): Promise<HealthCheckResult>
+
+  validateQuery(input: {
+    definition: QueryDefinition
+    context: ExecutionContext
+  }): Promise<{ valid: true }>          // throws ValidationError on failure
+
+  validateConfig(input: {
+    metadata: MetadataConfig
+    roles: RoleMeta[]
+  }): Promise<{ valid: true }>            // throws ConfigError on failure
 }
 
 interface MultiDbClientConfig {
