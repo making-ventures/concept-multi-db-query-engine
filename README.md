@@ -941,7 +941,9 @@ interface ColumnMapping {
   physicalName: string                // 'total_amount'; for aggregations: same as alias (e.g. 'totalSum')
   apiName: string                     // 'total'; for aggregations: the alias (e.g. 'totalSum')
   tableAlias: string                  // 't0'; for aggregations: the source column's table alias (or from-table alias for count(*))
+  tableApiName: string                // table's apiName — needed for meta.columns[].fromTable and collision-qualified keys
   masked: boolean                     // apply masking after fetch (always false for aggregation aliases)
+  nullable: boolean                   // mirrors ColumnMeta.nullable — needed for meta.columns[].nullable
   type: ColumnType                    // logical column type; for aggregations: inferred from fn (count → 'int', avg → always 'decimal', sum/min/max → source column type)
   maskingFn?: 'email' | 'phone' | 'name' | 'uuid' | 'number' | 'date' | 'full'
                                       // which masking function to apply — sourced from effective access resolution
@@ -1079,8 +1081,7 @@ interface JoinClause {
 interface WhereCondition {
   column: ColumnRef | string          // ColumnRef for table columns; bare string for aggregation aliases in HAVING (e.g. 'totalSum')
   operator: string                    // '=', 'ILIKE', 'ANY', etc. — string (not union) because dialects may emit operators beyond the public QueryFilter set
-  paramIndex?: number                 // for parameterized values (mutually exclusive with `literal`)
-  literal?: string                    // for IS NULL, IS NOT NULL (mutually exclusive with `paramIndex`)
+  paramIndex?: number                 // index into SqlParts.params; omitted for operator-only conditions (isNull, isNotNull)
   columnType?: string                 // logical column type (e.g. 'string', 'int', 'uuid') — needed for type-specific SQL (ClickHouse typed params, Postgres IN/NOT IN array casts)
 }
 
@@ -1933,6 +1934,7 @@ This ensures both implementations behave identically — same results, same erro
 │   │   ├── src/
 │   │   │   ├── index.ts             # public API: validateQuery, validateConfig, validateApiName + re-exports
 │   │   │   ├── errors.ts            # MultiDbError, ConfigError, ConnectionError, ValidationError, PlannerError, ExecutionError, ProviderError
+│   │   │   ├── metadataIndex.ts     # MetadataIndex — pre-indexed metadata for O(1) lookups
 │   │   │   ├── types/
 │   │   │   │   ├── metadata.ts      # DatabaseMeta, TableMeta, ColumnMeta, RelationMeta, ExternalSync, CacheMeta, RoleMeta
 │   │   │   │   ├── query.ts         # QueryDefinition, QueryFilter, QueryJoin, QueryAggregation, etc.
@@ -1945,6 +1947,7 @@ This ensures both implementations behave identically — same results, same erro
 │   │   └── tests/
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
+│   │       ├── errors.test.ts       # error class construction + toJSON serialization (34 tests)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
 │   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187, 190–192, 195, 198, 199, 229–232, 234, 235
 │   │
@@ -1953,9 +1956,14 @@ This ensures both implementations behave identically — same results, same erro
 │   │   ├── tsconfig.json
 │   │   └── src/
 │   │       ├── index.ts             # public API (re-exports types + errors from validation package)
+│   │       ├── pipeline.ts          # createMultiDb, query pipeline orchestration, result building
+│   │       ├── types/
+│   │       │   ├── ir.ts            # SqlParts, WhereNode, ColumnMapping, CorrelatedSubquery (dialect-agnostic IR)
+│   │       │   ├── interfaces.ts    # DbExecutor, CacheProvider interfaces
+│   │       │   └── providers.ts     # MetadataProvider, RoleProvider interfaces
 │   │       ├── metadata/
 │   │       │   ├── registry.ts      # MetadataRegistry — stores and indexes all metadata
-│   │       │   └── providers.ts     # MetadataProvider / RoleProvider interfaces + static helpers
+│   │       │   └── providers.ts     # static helpers (staticMetadata, staticRoles)
 │   │       ├── access/
 │   │       │   └── access.ts        # role-based column trimming
 │   │       ├── masking/
@@ -1981,8 +1989,7 @@ This ensures both implementations behave identically — same results, same erro
 │   │       ├── access/              # scenarios 13, 14, 14b–14f, 16, 38, 95, 104, 106, 233
 │   │       ├── planner/             # scenarios 1–12, 19, 33, 56, 57, 59, 64, 79, 103, 130
 │   │       ├── generator/           # scenarios 20–30, 45, 66–75, 77, 83–85, 90–94, 99–102, 108, 110–115, 124–129, 133–138, 142, 144, 147–149, 155–157, 160–164, 166, 181–186, 188–189, 193, 194, 196, 197, 200–207, 227
-│   │       ├── cache/               # scenario 35
-│   │       └── e2e/                 # scenarios 14e, 31, 39, 44, 48, 58, 60–62, 76, 105, 131, 132, 152, 170–172, 228
+│   │       └── e2e/                 # scenarios 14e, 31, 35, 39, 44, 48, 58, 60–62, 76, 105, 131, 132, 152, 170–172, 228
 │   │
 │   ├── client/                      # @mkven/multi-db-client
 │   │   ├── package.json
