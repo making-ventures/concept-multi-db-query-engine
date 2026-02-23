@@ -1,4 +1,6 @@
-# @mkven/multi-db — Implementation Stages
+← [Back to README](./README.md)
+
+# @mkven/multi-db-query — Implementation Stages
 
 This document breaks the concept into sequential implementation stages. Each stage produces a working, testable increment. Later stages depend on earlier ones.
 
@@ -118,7 +120,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Goal:** Build the in-memory metadata store with O(1) indexes and the provider abstraction.
 
-**Package:** `@mkven/multi-db`
+**Package:** `@mkven/multi-db-query`
 
 **Tasks:**
 1. Define `MetadataProvider` and `RoleProvider` interfaces
@@ -140,7 +142,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Goal:** Implement role-based column trimming and post-query masking.
 
-**Package:** `@mkven/multi-db`
+**Package:** `@mkven/multi-db-query`
 
 **Tasks:**
 1. Implement scope resolution: UNION within scope, INTERSECTION between scopes
@@ -161,7 +163,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Goal:** Translate apiNames to physical names, produce `SqlParts` IR and `ColumnMapping[]`.
 
-**Package:** `@mkven/multi-db`
+**Package:** `@mkven/multi-db-query`
 
 **Tasks:**
 1. Implement name resolver: `QueryDefinition` + access-controlled columns → `SqlParts` + `ColumnMapping[]`
@@ -189,7 +191,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Goal:** Implement the Postgres `SqlDialect` — first fully working SQL output.
 
-**Package:** `@mkven/multi-db`
+**Package:** `@mkven/multi-db-query`
 
 **Tasks:**
 1. Implement `SqlDialect` interface: `generate(parts: SqlParts): { sql: string; params: unknown[] }`
@@ -227,7 +229,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Goal:** Add the remaining two dialects.
 
-**Package:** `@mkven/multi-db`
+**Package:** `@mkven/multi-db-query`
 
 **Tasks:**
 1. Implement ClickHouse dialect:
@@ -262,7 +264,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Goal:** Implement strategy selection (P0–P4).
 
-**Package:** `@mkven/multi-db`
+**Package:** `@mkven/multi-db-query`
 
 **Tasks:**
 1. Use the database connectivity graph built in Stage 5 to evaluate reachability
@@ -327,7 +329,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Goal:** Wire all pieces into the full `createMultiDb()` initialization and `query()` pipeline.
 
-**Package:** `@mkven/multi-db`
+**Package:** `@mkven/multi-db-query`
 
 **Tasks:**
 1. Implement `createMultiDb(options)`:

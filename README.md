@@ -600,6 +600,14 @@ Documents three categories of cross-database divergence (Postgres vs ClickHouse 
 
 ---
 
+## Implementation Stages
+
+Sequential implementation stages — each produces a working, testable increment. 14 stages from scaffold through final verification.
+
+→ See [STAGES.md](./STAGES.md)
+
+---
+
 ## Project Structure
 
 ```
