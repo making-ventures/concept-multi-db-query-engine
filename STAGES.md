@@ -310,7 +310,7 @@ This document breaks the concept into sequential implementation stages. Each sta
    - Named parameter binding
    - `ping()` → `SELECT 1`
    - `timeoutMs` → `max_execution_time`
-3. **Trino executor** (native `fetch`):
+3. **Trino executor** (`trino-client`):
    - Positional `?` parameter binding
    - `ping()` → `SELECT 1`
    - `timeoutMs` → query timeout

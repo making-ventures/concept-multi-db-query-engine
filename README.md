@@ -538,7 +538,7 @@ Test databases, tables, columns, relations, roles, and the full test scenario ca
 | `@mkven/multi-db-query` | Core: metadata registry, planner, SQL generators, name resolution, masking, debug logger | `@mkven/multi-db-validation` |
 | `@mkven/multi-db-executor-postgres` | Postgres connection + execution | `pg` |
 | `@mkven/multi-db-executor-clickhouse` | ClickHouse connection + execution | `@clickhouse/client` |
-| `@mkven/multi-db-executor-trino` | Trino connection + execution | native `fetch` (REST API) |
+| `@mkven/multi-db-executor-trino` | Trino connection + execution | `trino-client` |
 | `@mkven/multi-db-cache-redis` | Redis cache provider (Debezium-synced) | `ioredis` |
 | `@mkven/multi-db-client` | Typed HTTP client | `@mkven/multi-db-validation` (types, errors; uses native `fetch`) |
 | `@mkven/multi-db-contract` | Contract test suites (7 `describe*Contract` functions) | `@mkven/multi-db-client`, `@mkven/multi-db-query`, `@mkven/multi-db-validation`, `vitest` |
