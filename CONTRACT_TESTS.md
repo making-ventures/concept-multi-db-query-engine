@@ -1040,13 +1040,13 @@ These tests target pg-main tables, exercising PostgreSQL's `$N` parameterization
 | C1400 | PG `=` filter injection | orders, `status = "'; DROP TABLE orders; --"` | value parameterized via `$1`; no table dropped |
 | C1401 | PG `like` filter injection | users, `email like "%'; DROP TABLE users; --%"` | value parameterized via `$1`; no injection |
 | C1402 | PG `contains` injection | users, `email contains "'; DROP TABLE --"` | escapeLike + parameterized via `$1`; no injection |
-| C1403 | PG `between` injection | orders, `total between { from: "0; DROP TABLE orders", to: 100 }` | both bounds parameterized via `$1`, `$2`; rejected or treated as literal |
+| C1403 | PG `between` injection | orders, `total between { from: "0; DROP TABLE orders", to: 100 }` | **rejected** — string value on numeric column triggers validation error (type mismatch) |
 | C1406 | PG `in` filter injection | orders, `status in ["active'; DROP TABLE orders; --"]` | `= ANY($1::text[])` — single array param; no injection |
 | C1407 | PG `notIn` filter injection | orders, `status notIn ["active'; DROP TABLE orders; --"]` | `<> ALL($1::text[])` — single array param; no injection |
 | C1408 | PG `levenshteinLte` injection | users, `firstName levenshteinLte { text: "'; DROP TABLE users; --", maxDistance: 3 }` | `levenshtein(col, $1) <= $2`; both parameterized; no injection |
 | C1409 | PG `arrayContains` injection | products, `labels arrayContains "sale'; DROP TABLE products; --"` | `$1::text = ANY(col)` parameterized; no injection |
 | C1431 | PG `icontains` injection | users, `email icontains "'; DROP TABLE users; --"` | `ILIKE $1` (native keyword); no injection |
-| C1432 | PG `notBetween` injection | orders, `total notBetween { from: "0; DROP TABLE orders", to: 100 }` | `NOT BETWEEN $1 AND $2`; both parameterized; no injection |
+| C1432 | PG `notBetween` injection | orders, `total notBetween { from: "0; DROP TABLE orders", to: 100 }` | **rejected** — string value on numeric column triggers validation error (type mismatch) |
 | C1433 | PG `endsWith` injection | users, `email endsWith "'; DROP TABLE users; --"` | `LIKE $1` with `%escaped` pattern; parameterized; no injection |
 | C1453 | PG `startsWith` injection | users, `email startsWith "'; DROP TABLE users; --"` | `LIKE $1` with `escaped%` pattern; parameterized; no injection |
 | C1434 | PG `arrayContainsAll` injection | products, `labels arrayContainsAll ["sale'; DROP TABLE products; --"]` | `col @> $1::text[]` — PG array containment operator; no injection |
@@ -1086,16 +1086,43 @@ These tests use cross-DB joins (events + users/products), forcing Trino as the e
 | C1429 | Trino `contains` filter injection | events JOIN users, filter `users.email contains "'; DROP TABLE users; --"` | escapeLike applied, `LIKE ? ESCAPE '\\'` — Trino-specific ESCAPE clause; no injection |
 | C1430 | Trino `levenshteinLte` injection | events JOIN users, filter `users.firstName levenshteinLte { text: "'; DROP TABLE users; --", maxDistance: 5 }` | `levenshtein_distance(col, ?) <= ?`; both params via `?`; no injection |
 | C1442 | Trino `icontains` injection | events JOIN users, filter `users.email icontains "'; DROP TABLE users; --"` | `lower(col) LIKE lower(?) ESCAPE '\\'`; Trino `lower()` emulation + ESCAPE; no injection |
-| C1443 | Trino `arrayContains` injection | events JOIN users and products, filter `products.labels arrayContains "x'; DROP TABLE products; --"` | `contains(col, ?)`; value parameterized; no injection |
-| C1444 | Trino `arrayContainsAll` injection | events JOIN users and products, filter `products.labels arrayContainsAll ["x'; DROP TABLE products; --"]` | `cardinality(array_except(ARRAY[?, ...], col)) = 0`; each element parameterized; no injection |
-| C1445 | Trino `arrayContainsAny` injection | events JOIN users and products, filter `products.labels arrayContainsAny ["x'; DROP TABLE products; --"]` | `arrays_overlap(col, ARRAY[?, ...])` — each element parameterized; no injection |
+| C1443 | Trino `arrayContains` injection | events JOIN users (no products join), filter `products.labels arrayContains "x'; DROP TABLE products; --"` | **rejected** — `table: 'products'` not joined; validation catches unknown table reference |
+| C1444 | Trino `arrayContainsAll` injection | events JOIN users (no products join), filter `products.labels arrayContainsAll ["x'; DROP TABLE products; --"]` | **rejected** — `table: 'products'` not joined; validation catches unknown table reference |
+| C1445 | Trino `arrayContainsAny` injection | events JOIN users (no products join), filter `products.labels arrayContainsAny ["x'; DROP TABLE products; --"]` | **rejected** — `table: 'products'` not joined; validation catches unknown table reference |
 | C1452 | Trino `notIn` injection | events JOIN users, filter `users.email notIn ["x'; DROP TABLE users; --"]` | `NOT IN (?, ?, ...)` — each element individually parameterized; no injection |
 | C1447 | Trino `byIds` injection | events JOIN users, `byIds: ["'; DROP TABLE users; --"]` on users table (cross-DB) | resolved as `IN (?, ?, ...)` on PK; each value parameterized; no injection |
 | C1455 | Trino `like` injection | events JOIN users, filter `users.email like "%'; DROP TABLE users; --%"` | `LIKE ?` parameterized; no injection |
-| C1456 | Trino `between` injection | events JOIN users, filter `users.age between { from: "0; DROP TABLE users", to: 100 }` | `BETWEEN ? AND ?`; both parameterized; no injection |
-| C1457 | Trino `notBetween` injection | events JOIN users, filter `users.age notBetween { from: "0; DROP TABLE users", to: 100 }` | `NOT BETWEEN ? AND ?`; both parameterized; no injection |
+| C1456 | Trino `between` injection | events JOIN users, filter `users.age between { from: "0; DROP TABLE users", to: 100 }` | **rejected** — string value on numeric `age` column triggers validation error (type mismatch) |
+| C1457 | Trino `notBetween` injection | events JOIN users, filter `users.age notBetween { from: "0; DROP TABLE users", to: 100 }` | **rejected** — string value on numeric `age` column triggers validation error (type mismatch) |
 | C1458 | Trino `startsWith` injection | events JOIN users, filter `users.email startsWith "'; DROP TABLE users; --"` | `LIKE ? ESCAPE '\\'`; parameterized; no injection |
 | C1459 | Trino `endsWith` injection | events JOIN users, filter `users.email endsWith "'; DROP TABLE users; --"` | `LIKE ? ESCAPE '\\'`; parameterized; no injection |
+
+### 16.6 Advanced Injection Vectors (all dialects)
+
+These tests exercise attack patterns that target edge cases in escaping and parameterization logic — backslash-quote bypasses, null bytes, Unicode lookalikes, nested quoting, comment sequences, and newline-based payload splitting. All must be neutralized by parameterization (PG/CH) or quote-doubling (Trino), and identifiers must survive escaping without exposing raw SQL.
+
+| ID | Test | Definition | Assertions |
+|---|---|---|---|
+| C1474 | Backslash-quote bypass in PG filter value | orders, `status = "\\'; DROP TABLE orders; --"` | `$1` parameterization handles backslash as data; no injection |
+| C1475 | Backslash-quote bypass in CH filter value | events, `type = "\\'; DROP TABLE events; --"` | `{pN:String}` parameterization handles backslash as data; no injection |
+| C1476 | Backslash-quote bypass in Trino filter value | events JOIN users, `users.email = "\\'; DROP TABLE users; --"` | `escapeTrinoValue` doubles `'` after `\\`; no injection |
+| C1477 | Null byte injection in PG filter value | orders, `status = "\0'; DROP TABLE orders; --"` | null byte treated as data by parameterized query; no injection |
+| C1478 | Null byte injection in CH filter value | events, `type = "\0'; DROP TABLE events; --"` | null byte treated as data by parameterized query; no injection |
+| C1479 | Null byte injection in Trino filter value | events JOIN users, `users.email = "\0'; DROP TABLE users; --"` | null byte is part of escaped string literal; no injection |
+| C1480 | Unicode apostrophe in PG filter value | orders, `status = "ʼ; DROP TABLE orders; --"` (U+02BC) | Unicode char is not ASCII `'` — no quote breakout; parameterized; no injection |
+| C1481 | Unicode apostrophe in CH filter value | events, `type = "ʼ; DROP TABLE events; --"` (U+02BC) | Unicode char treated as data; no injection |
+| C1482 | Unicode apostrophe in Trino filter value | events JOIN users, `users.email = "ʼ; DROP TABLE users; --"` (U+02BC) | Unicode char does not match `'` in `escapeTrinoValue`; passed as literal data; no injection |
+| C1483 | Nested triple-quote in PG filter value | orders, `status = "'''; DROP TABLE orders; --"` | parameterized via `$1`; odd quote count is irrelevant to parameter binding; no injection |
+| C1484 | Nested triple-quote in CH filter value | events, `type = "'''; DROP TABLE events; --"` | parameterized via `{pN:String}`; no injection |
+| C1485 | Nested triple-quote in Trino filter value | events JOIN users, `users.email = "'''; DROP TABLE users; --"` | `escapeTrinoValue` doubles each `'` → even count; no injection |
+| C1486 | Multi-line comment injection in PG filter value | orders, `status = "x' /**/; DROP TABLE orders; --"` | `$1` parameterization; comment syntax inside string data; no injection |
+| C1487 | Multi-line comment injection in CH filter value | events, `type = "x' /**/; DROP TABLE events; --"` | `{pN:String}` parameterization; no injection |
+| C1488 | Multi-line comment injection in Trino filter value | events JOIN users, `users.email = "x' /**/; DROP TABLE users; --"` | `escapeTrinoValue` doubles `'`; `/**/` inside literal; no injection |
+| C1489 | Newline-based injection in PG filter value | orders, `status = "x'\n; DROP TABLE orders\n--"` | `$1` parameterization; newlines inside string data; no injection |
+| C1490 | Newline-based injection in CH filter value | events, `type = "x'\n; DROP TABLE events\n--"` | `{pN:String}` parameterization; newlines inside string data; no injection |
+| C1491 | Newline-based injection in Trino filter value | events JOIN users, `users.email = "x'\n; DROP TABLE users\n--"` | `escapeTrinoValue` doubles `'`; newlines inside literal; no injection |
+| C1492 | Double-quote bomb in identifier alias | orders, `aggregations: [{ column: 'total', fn: 'sum', alias: '"""; DROP TABLE orders;--' }]` | `escapeIdentDQ` doubles each `"` → safe quoted identifier; no injection |
+| C1493 | Backtick bomb in identifier alias | events, `aggregations: [{ column: 'timestamp', fn: 'count', alias: '```; DROP TABLE events;--' }]` | `escapeIdentBT` doubles each `` ` `` → safe quoted identifier; no injection |
 ---
 
 ## 17. Validation Endpoints

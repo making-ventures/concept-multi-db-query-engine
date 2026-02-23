@@ -589,7 +589,7 @@ HTTP API contract (endpoints, error status codes), `MultiDbClient` configuration
 
 ## Contract Test Suite
 
-Full contract test suite (420 unique test IDs, ~656 parameterized executions) defining behavioral correctness for any conforming `@mkven/multi-db-query` server implementation.
+Full contract test suite (440 unique test IDs, ~676 parameterized executions) defining behavioral correctness for any conforming `@mkven/multi-db-query` server implementation.
 
 → See [CONTRACT_TESTS.md](./CONTRACT_TESTS.md)
 
@@ -600,6 +600,14 @@ Full contract test suite (420 unique test IDs, ~656 parameterized executions) de
 Documents three categories of cross-database divergence (Postgres vs ClickHouse vs Trino) and the normalization rules applied to ensure consistent query results.
 
 → See [CROSS_DB_NORMALIZATION.md](./CROSS_DB_NORMALIZATION.md)
+
+---
+
+## SQL Injection Prevention
+
+Three-layer defense model — metadata validation, parameterized queries, and identifier escaping — with 60+ contract tests covering standard and advanced injection vectors across all three dialects.
+
+→ See [SECURITY.md](./SECURITY.md)
 
 ---
 
