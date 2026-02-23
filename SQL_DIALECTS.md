@@ -1,4 +1,4 @@
-]633;E;npx tsx /tmp/_probe_new.ts 2>&1;a4a067fc-0122-4586-a8c5-a19cc31656cb]633;C← [Back to README](./README.md)
+← [Back to README](./README.md)
 
 ## SQL Dialect Differences
 
@@ -152,7 +152,7 @@ type HavingNode = WhereCondition | HavingBetween | HavingGroup
 // Range condition on an aggregation alias — uses bare string, not ColumnRef
 interface HavingBetween {
   alias: string                       // aggregation alias (e.g. 'totalSum')
-  not?: boolean                       // when true, negates the range; per-dialect form varies (see SQL Dialect Differences)
+  not?: boolean                       // when true, negates the range; per-dialect form varies (see dialect table above)
   fromParamIndex: number
   toParamIndex: number
 }
@@ -234,7 +234,7 @@ interface WhereColumnCondition {
 // Range condition — for 'between' / 'notBetween' operators
 interface WhereBetween {
   column: ColumnRef
-  not?: boolean                       // when true, negates the range — used by 'notBetween' operator; per-dialect form varies (see SQL Dialect Differences)
+  not?: boolean                       // when true, negates the range — used by 'notBetween' operator; per-dialect form varies (see dialect table above)
   fromParamIndex: number              // param index for lower bound
   toParamIndex: number                // param index for upper bound
 }

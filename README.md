@@ -90,6 +90,7 @@ Every phase emits structured debug log entries (when `debug: true` is set on the
 Databases, tables, columns, relations, external syncs (Debezium), cache (Redis), roles & access control, column masking, metadata configuration, and provider interfaces.
 
 → See [METADATA.md](./METADATA.md)
+
 ---
 
 ## Module Initialization & Query API
@@ -223,6 +224,7 @@ const countResult = await multiDb.query({
 Query input (`QueryDefinition`), execution context, query result types (`SqlResult`, `DataResult`, `CountResult`), result metadata, and debug log entries.
 
 → See [QUERY.md](./QUERY.md)
+
 ---
 
 ## Query Planner Strategy
@@ -450,6 +452,7 @@ This decouples the API contract from database schema evolution.
 Per-dialect SQL generation: identifier quoting, parameter binding, `in`/`notIn`, ILIKE, BETWEEN, array operators, counted subqueries, type mappings, and the `SqlParts` intermediate representation.
 
 → See [SQL_DIALECTS.md](./SQL_DIALECTS.md)
+
 ---
 
 ## Debug Logging — Example Flow
@@ -491,6 +494,7 @@ For cross-database scenario:
 Test databases, tables, columns, relations, roles, and the full test scenario catalog (~240 scenarios across validation, init, access, planner, generator, cache, e2e, client, and contract test suites).
 
 → See [TESTS.md](./TESTS.md)
+
 ---
 
 ## Design Decisions
@@ -577,6 +581,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 HTTP API contract (endpoints, error status codes), `MultiDbClient` configuration, error deserialization, local validation, and the contract test suite (`QueryContract` interface).
 
 → See [HTTP_CLIENT.md](./HTTP_CLIENT.md)
+
 ---
 
 ## Project Structure

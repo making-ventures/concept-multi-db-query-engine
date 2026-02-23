@@ -1,4 +1,4 @@
-]633;E;npx tsx /tmp/_probe_new.ts 2>&1;a4a067fc-0122-4586-a8c5-a19cc31656cb]633;C← [Back to README](./README.md)
+← [Back to README](./README.md)
 
 ## Query Definition
 
