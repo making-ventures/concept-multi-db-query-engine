@@ -330,6 +330,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 276 | Trino polling error → `ExecutionError` | mock fetch: first response has `nextUri`, second returns error | `ExecutionError` with `code: 'QUERY_FAILED'` |
 | 277 | Trino happy path returns rows | mock fetch returns columns + data | rows returned as `Record<string, unknown>[]` |
 | 278 | Trino param inlining | `execute('SELECT ? AND ? AND ?', [42, true, "O'Brien"])` | fetch body contains `42`, `TRUE`, `'O''Brien'` — values correctly escaped/inlined |
+| 281 | Trino `execute()` wraps network error in `ExecutionError` | mock fetch rejects with `TypeError('fetch failed')` | `ExecutionError` with `code: 'QUERY_FAILED'` |
+| 282 | Trino `ping()` wraps network error in `ConnectionError` | mock fetch rejects with `TypeError('fetch failed')` | `ConnectionError` with `code: 'CONNECTION_FAILED'` |
 
 #### `packages/executor-clickhouse/tests/` — ClickHouse executor unit tests
 
@@ -337,6 +339,18 @@ Tests are split between packages. Validation package tests run without DB connec
 |---|---|---|---|
 | 279 | ClickHouse ping failure → `ConnectionError` | mock `@clickhouse/client` ping returns `{ success: false }` | `ConnectionError` with `code: 'CONNECTION_FAILED'` |
 | 280 | ClickHouse ping success | mock ping returns `{ success: true }` | resolves without error |
+| 283 | ClickHouse ping network error → `ConnectionError` | mock `@clickhouse/client` ping rejects with `ECONNREFUSED` | `ConnectionError` with `code: 'CONNECTION_FAILED'` |
+| 284 | ClickHouse `execute()` error → `ExecutionError` | mock `@clickhouse/client` query rejects | `ExecutionError` with `code: 'QUERY_FAILED'` |
+
+#### Executor contract tests (C1800–C1804 × 3 executors)
+
+| # | Scenario | Input | Focus |
+|---|---|---|---|
+| 285 | Executor `ping()` resolves for healthy connection | real executor `ping()` | resolves without error (× postgres, clickhouse, trino) |
+| 286 | Executor `execute()` returns rows | `SELECT 1 AS n` on real executor | non-empty `Record[]` array returned |
+| 287 | Executor `execute()` throws `ExecutionError` for bad SQL | invalid SQL on real executor | `ExecutionError` with `code: 'QUERY_FAILED'` |
+| 288 | Executor `close()` resolves without error | fresh executor `close()` | completes without throwing |
+| 289 | Executor `ping()` after close | closed executor `ping()` | throws `ConnectionError` or `ExecutionError` (stateless executors may not throw) |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 

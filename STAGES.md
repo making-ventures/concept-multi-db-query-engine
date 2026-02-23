@@ -322,7 +322,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Exit criteria:** Each package connects, executes, pings, and closes correctly.
 
-**Test scenarios covered:** #272–278 (executor-trino: unsupported param types, ExecutionError paths, happy path, param inlining), #279–280 (executor-clickhouse: ping failure → ConnectionError, ping success)
+**Test scenarios covered:** #272–278, #281–282 (executor-trino: unsupported param types, ExecutionError paths, happy path, param inlining, network error wrapping), #279–280, #283–284 (executor-clickhouse: ping failure/success, network error, execute error), #285–289 (executor contract: C1800–C1804 × 3 executors)
 
 ---
 
@@ -382,18 +382,18 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 ## Stage 14 — Final Verification
 
-**Goal:** Run all 280 test scenarios together, verify cross-stage integration, and confirm no regressions.
+**Goal:** Run all 289 test scenarios together, verify cross-stage integration, and confirm no regressions.
 
 **Package:** all
 
 **Tasks:**
 1. Run full test suite across all packages — `pnpm test` at monorepo root
-2. Verify all 280 unique scenarios pass — some appear in multiple packages (e.g. #157 is validated in both validation/query and core/generator)
+2. Verify all 289 unique scenarios pass — some appear in multiple packages (e.g. #157 is validated in both validation/query and core/generator)
 3. Smoke-test the full pipeline end-to-end: init → query → reload → healthCheck → close
 4. Verify `pnpm build` produces clean packages with correct dependency graph
 5. Review test coverage gaps — any untested code paths surfaced by coverage reports
 
-**Exit criteria:** All 280 test scenarios pass across all packages. Build succeeds. No regressions.
+**Exit criteria:** All 289 test scenarios pass across all packages. Build succeeds. No regressions.
 
 ---
 
@@ -411,13 +411,13 @@ This document breaks the concept into sequential implementation stages. Each sta
 | 8 | core | SQL gen — Postgres + fragment helpers | 101 |
 | 9 | core | SQL gen — ClickHouse + Trino | 1 (same 101, 2 more dialects; +#271) |
 | 10 | core | Query planner (P0–P4) | 21 |
-| 11 | executor-*, cache-redis | DB executors + Redis cache | 9 |
+| 11 | executor-*, cache-redis | DB executors + Redis cache | 18 |
 | 12 | core | Full pipeline + lifecycle | 20 |
 | 13 | client, contract, contract-tests | HTTP client + contract suites + wiring | 26 |
 | 14 | all | Final verification | — |
-| **Total** | | | **280** |
+| **Total** | | | **289** |
 
-\* Per-stage counts sum to 281 because #157 appears in both Stage 4 (validation) and Stage 8 (SQL generation). Unique total: 280 = 275 integer-numbered scenarios (#1–#280, with gaps) + 5 sub-variants (#14b, #14c, #14d, #14e, #14f).
+\* Per-stage counts sum to 290 because #157 appears in both Stage 4 (validation) and Stage 8 (SQL generation). Unique total: 289 = 284 integer-numbered scenarios (#1–#289, with gaps) + 5 sub-variants (#14b, #14c, #14d, #14e, #14f).
 
 **Dependency graph:**
 

@@ -491,7 +491,7 @@ For cross-database scenario:
 
 ## Recommended Test Configuration
 
-Test databases, tables, columns, relations, roles, and the full test scenario catalog (~280 scenarios across validation, init, access, planner, generator, cache, e2e, client, executor, and contract test suites).
+Test databases, tables, columns, relations, roles, and the full test scenario catalog (~289 scenarios across validation, init, access, planner, generator, cache, e2e, client, executor, and contract test suites).
 
 → See [TESTS.md](./TESTS.md)
 
@@ -589,7 +589,7 @@ HTTP API contract (endpoints, error status codes), `MultiDbClient` configuration
 
 ## Contract Test Suite
 
-Full HTTP contract test suite (415 test IDs × 3 dialects) defining behavioral correctness for any conforming `@mkven/multi-db-query` server implementation.
+Full HTTP contract test suite (420 test IDs × 3 dialects) defining behavioral correctness for any conforming `@mkven/multi-db-query` server implementation.
 
 → See [CONTRACT_TESTS.md](./CONTRACT_TESTS.md)
 

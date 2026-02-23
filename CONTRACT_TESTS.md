@@ -30,7 +30,7 @@ interface QueryContract {
 }
 ```
 
-The `@mkven/multi-db-contract` package exports 6 parameterized test suites: `describeQueryContract()`, `describeValidationContract()`, `describeErrorContract()`, `describeEdgeCaseContract()`, `describeHealthLifecycleContract()`, and `describeInjectionContract()`. Each implementation provides a factory function:
+The `@mkven/multi-db-contract` package exports 7 parameterized test suites: `describeQueryContract()`, `describeValidationContract()`, `describeErrorContract()`, `describeEdgeCaseContract()`, `describeHealthLifecycleContract()`, `describeInjectionContract()`, and `describeExecutorContract()`. Each implementation provides a factory function:
 
 ```ts
 import { describeQueryContract } from '@mkven/multi-db-contract'
@@ -1161,6 +1161,20 @@ These tests verify the dedicated validation endpoints that run without DB connec
 
 ---
 
+## 19. Executor Contract
+
+Individual `DbExecutor` implementations must satisfy the following behavioral guarantees. The `describeExecutorContract(name, factory, config)` suite tests any `DbExecutor` directly — not through the full query pipeline.
+
+| ID | Test | Input | Assertions |
+|---|---|---|---|
+| C1800 | `ping()` resolves for healthy executor | healthy executor | `ping()` resolves without error |
+| C1801 | `execute()` returns `Record[]` for valid SQL | `SELECT 1 AS n` | returns non-empty array of plain objects |
+| C1802 | `execute()` throws `ExecutionError` for invalid SQL | `SELECT * FROM __nonexistent_table_xyz__` | `ExecutionError` with `code: 'QUERY_FAILED'` |
+| C1803 | `close()` resolves without error | fresh executor | `close()` completes without throwing |
+| C1804 | `ping()` throws after close | closed executor | throws `ConnectionError` or `ExecutionError` (stateless executors like Trino REST may not throw — acceptable) |
+
+---
+
 ## Implementation Checklist
 
 For implementation developers, verify the following groups pass in order:
@@ -1187,8 +1201,9 @@ For implementation developers, verify the following groups pass in order:
 20. **Lifecycle** (C1310-C1313) — reload metadata/roles, close
 21. **SQL Injection** (C1400-C1473) — per-dialect parameterization, identifier validation, alias escaping, enum-keyword validation
 22. **Edge Cases** (C1700-C1716) — nulls, types, strategies, freshness, distinct+count, empty groups
+23. **Executor Contract** (C1800-C1804) — ping, execute, close, error wrapping for any `DbExecutor` implementation
 
-Total: **415 unique test IDs** × parameterization = ~**641 test executions** (sections 3–9: 113 IDs × 3 dialects + C505 × 1 = 340; other sections: 301 × 1 = 301; total = 641)
+Total: **420 unique test IDs** × parameterization = ~**661 test executions** (sections 3–9: 113 IDs × 3 dialects + C505 × 1 = 340; other sections: 306 × 1 = 306; section 23: C1800-C1804 × 3 executors = 15; total = 661)
 
 ---
 
