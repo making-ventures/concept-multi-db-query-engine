@@ -305,6 +305,38 @@ Tests are split between packages. Validation package tests run without DB connec
 | 206 | Array filter on joined table | orders JOIN products, filter: { column: 'labels', table: 'products', operator: 'arrayContainsAny', value: ['sale'] } | `t1."labels" && $1::text[]` — array filter using `table` qualifier on joined table column |
 | 207 | `arrayContainsAll` single element | products WHERE labels arrayContainsAll ['sale'] | PG: `t0."labels" @> $1::text[]` — single-element array is valid (same syntax, param is `['sale']`) |
 | 227 | Nested EXISTS (valid) | orders EXISTS(invoices WHERE EXISTS(tenants)) | `EXISTS (SELECT 1 FROM invoices t1 WHERE t1."order_id" = t0."id" AND EXISTS (SELECT 1 FROM tenants t2 WHERE t2."id" = t1."tenant_id"))` — inner EXISTS resolves tenants against invoices (parent) |
+| 259 | `escapeIdentDQ` clean passthrough | `escapeIdentDQ('hello')` | returns `'hello'` unchanged |
+| 260 | `escapeIdentDQ` doubles internal quotes | `escapeIdentDQ('x"; DROP TABLE t;--')` | returns `'x""; DROP TABLE t;--'` — injection neutralized |
+| 261 | `escapeIdentBT` clean passthrough | `escapeIdentBT('hello')` | returns `'hello'` unchanged |
+| 262 | `escapeIdentBT` doubles internal backticks | `` escapeIdentBT('x`; DROP TABLE t;--') `` | returns `` 'x``; DROP TABLE t;--' `` — injection neutralized |
+| 263 | `safeAggFn` accepts valid names | `safeAggFn('count')`, `safeAggFn('SUM')`, etc. | returns uppercase: `COUNT`, `SUM`, `AVG`, `MIN`, `MAX` |
+| 264 | `safeAggFn` rejects unknown — defaults to COUNT | `safeAggFn('concat')`, `safeAggFn('sum); DROP')` | returns `COUNT` (safe default) |
+| 265 | `safeWhereFn` accepts `levenshtein` | `safeWhereFn('levenshtein')` | returns `'levenshtein'` |
+| 266 | `safeWhereFn` accepts `levenshtein_distance` | `safeWhereFn('levenshtein_distance')` | returns `'levenshtein_distance'` |
+| 267 | `safeWhereFn` accepts `editDistance` (case-insensitive) | `safeWhereFn('editDistance')` | returns `'editDistance'` — whitelist is case-insensitive |
+| 268 | `safeWhereFn` preserves original case | `safeWhereFn('LEVENSHTEIN')` | returns `'LEVENSHTEIN'` — case preserved |
+| 269 | `safeWhereFn` rejects unknown function | `safeWhereFn('concat')` | throws `'Unsupported where function: concat'` |
+| 270 | `safeWhereFn` rejects injection payload | `safeWhereFn('levenshtein); DROP')` | throws `'Unsupported where function'` |
+| 271 | `safeWhereFn` injection via dialect `generate()` | WhereFunction with `fn: 'levenshtein); DROP TABLE orders;--'` | `dialect.generate()` throws — injection blocked before SQL emitted (× 3 dialects) |
+
+#### `packages/executor-trino/tests/` — Trino executor unit tests
+
+| # | Scenario | Input | Focus |
+|---|---|---|---|
+| 272 | `escapeTrinoValue` rejects object param | `executor.execute('SELECT ?', [{}])` | throws `'Unsupported Trino parameter type: object'` |
+| 273 | `escapeTrinoValue` rejects function param | `executor.execute('SELECT ?', [() => {}])` | throws `'Unsupported Trino parameter type: function'` |
+| 274 | `escapeTrinoValue` rejects symbol param | `executor.execute('SELECT ?', [Symbol('x')])` | throws `'Unsupported Trino parameter type: symbol'` |
+| 275 | Trino initial error → `ExecutionError` | mock fetch returns `{ error: { message: '...' } }` | `ExecutionError` with `code: 'QUERY_FAILED'`, `database: 'trino'` |
+| 276 | Trino polling error → `ExecutionError` | mock fetch: first response has `nextUri`, second returns error | `ExecutionError` with `code: 'QUERY_FAILED'` |
+| 277 | Trino happy path returns rows | mock fetch returns columns + data | rows returned as `Record<string, unknown>[]` |
+| 278 | Trino param inlining | `execute('SELECT ? AND ? AND ?', [42, true, "O'Brien"])` | fetch body contains `42`, `TRUE`, `'O''Brien'` — values correctly escaped/inlined |
+
+#### `packages/executor-clickhouse/tests/` — ClickHouse executor unit tests
+
+| # | Scenario | Input | Focus |
+|---|---|---|---|
+| 279 | ClickHouse ping failure → `ConnectionError` | mock `@clickhouse/client` ping returns `{ success: false }` | `ConnectionError` with `code: 'CONNECTION_FAILED'` |
+| 280 | ClickHouse ping success | mock ping returns `{ success: true }` | resolves without error |
 
 #### `packages/core/tests/cache/` — cache strategy + masking on cached data
 

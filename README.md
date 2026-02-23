@@ -491,7 +491,7 @@ For cross-database scenario:
 
 ## Recommended Test Configuration
 
-Test databases, tables, columns, relations, roles, and the full test scenario catalog (~263 scenarios across validation, init, access, planner, generator, cache, e2e, client, and contract test suites).
+Test databases, tables, columns, relations, roles, and the full test scenario catalog (~280 scenarios across validation, init, access, planner, generator, cache, e2e, client, executor, and contract test suites).
 
 → See [TESTS.md](./TESTS.md)
 
