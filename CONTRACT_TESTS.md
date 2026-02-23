@@ -564,7 +564,7 @@ Tests are organized into categories. Each test has a unique ID for traceability.
 |---|---|---|---|
 | C200 | LEFT JOIN (default) | samples JOIN sampleItems | rows include sampleItem columns (null for sample 4 which has no items) |
 | C201 | INNER JOIN | samples JOIN sampleItems `type: 'inner'` | only samples that have items (no sample 4) |
-| C202 | Multi-table join (3 tables) | samples JOIN sampleItems JOIN sampleDetails | columns from all 3 tables present |
+| C202 | Multi-table join (3 tables, transitive) | samples JOIN sampleItems JOIN sampleDetails | sampleDetails has relation to sampleItems (already joined), not to samples — transitive resolution; columns from all 3 tables present |
 | C203 | Join with column selection | samples JOIN sampleItems `columns: ['label']` | only `label` from sampleItems in result |
 | C204 | Join with `columns: []` | samples, JOIN sampleItems `columns: []`, groupBy sampleItems.category | join used for groupBy only — no sampleItem columns in SELECT |
 | C205 | Join-scoped filter | samples JOIN sampleItems, `sampleItems.filters: [{ column: 'category', operator: '=', value: 'electronics' }]` | only electronics items matched |
@@ -689,6 +689,8 @@ Tests are organized into categories. Each test has a unique ID for traceability.
 | C721 | Empty scope intersection **(negative)** | events, `user: ['tenant-user'], service: ['orders-service']` | tenant-user has no events access; orders-service has no events access → `ACCESS_DENIED` |
 | C722 | Omitted scope = no restriction | orders, `user: ['admin']` (no service scope) | full admin access; service scope imposes no restriction |
 | C723 | One scope with zero roles **(negative)** | orders, `user: [], service: ['orders-service']` | user scope has zero roles → zero permissions → `ACCESS_DENIED` regardless of service |
+| C724 | Multi-scope disjoint columns **(negative)** | users, `user: [scope-a: id+firstName], service: [scope-b: email+age]` | intersection of disjoint column sets → empty → `ACCESS_DENIED` |
+| C725 | Multi-scope wildcard ∩ specific | users, `user: ['admin'], service: [restricted: id+firstName]` | wildcard intersected with specific → restricted to id+firstName; requesting 'email' → `ACCESS_DENIED` |
 
 ---
 
@@ -781,7 +783,9 @@ All tests in this section expect the query to throw `ValidationError` with `code
 
 | ID | Test | Expected error code |
 |---|---|---|
-| C950 | Column filter type mismatch (decimal > string) | `INVALID_FILTER` |
+| C950 | Column filter type mismatch (decimal > string) — cross-family: numeric vs string rejected | `INVALID_FILTER` |
+| C954 | Column filter same numeric family (int > decimal) | no error — int and decimal are compatible |
+| C955 | Column filter same temporal family (date > timestamp) | no error — date and timestamp are compatible |
 | C951 | Column filter on denied column | `ACCESS_DENIED` |
 | C952 | Column filter non-existent refColumn | `UNKNOWN_COLUMN` |
 | C953 | Column filter on array column | `INVALID_FILTER` |
@@ -792,6 +796,7 @@ All tests in this section expect the query to throw `ValidationError` with `code
 |---|---|---|
 | C960 | Join with no relation defined | `INVALID_JOIN` |
 | C961 | Join to table with no role access | `ACCESS_DENIED` |
+| C962 | Transitive join with no path (3rd table unrelated to any joined table) | `INVALID_JOIN` |
 
 ### 12.6 GroupBy Validity
 
@@ -812,6 +817,8 @@ All tests in this section expect the query to throw `ValidationError` with `code
 | C979 | `contains` operator in HAVING | `INVALID_HAVING` |
 | C980 | `levenshteinLte` in HAVING | `INVALID_HAVING` |
 | C981 | `arrayContains` in HAVING | `INVALID_HAVING` |
+| C982 | Top-level QueryColumnFilter in HAVING (no group wrapper) | `INVALID_HAVING` |
+| C983 | Top-level QueryExistsFilter in HAVING (no group wrapper) | `INVALID_HAVING` |
 
 ### 12.8 OrderBy Validity
 
@@ -1169,7 +1176,7 @@ For implementation developers, verify the following groups pass in order:
 9. **ORDER BY, LIMIT, OFFSET, DISTINCT** (C400-C407 × 3 dialects) — pagination + sorting
 10. **byIds** (C500-C507 × 3 dialects, C505 pg-only) — primary key shortcut, composite PK rejection
 11. **EXISTS** (C600-C613 × 3 dialects) — subqueries, all 6 counted operators, self-referencing, nested, join combo
-12. **Access Control** (C700-C723) — roles, scopes, intersection, joined table access
+12. **Access Control** (C700-C725) — roles, scopes, intersection, joined table access, multi-scope disjoint/wildcard
 13. **Masking** (C800-C816) — all 7 masking functions (number, full, email, phone, name, date, uuid + null pass-through), multi-role, cross-scope
 14. **Validation Errors** (C900-C1030) — all 14 rules verified (via /query)
 15. **Meta Verification** (C1100-C1113) — response metadata, targetDatabase, dialect per mode, agg nullable
@@ -1181,7 +1188,7 @@ For implementation developers, verify the following groups pass in order:
 21. **SQL Injection** (C1400-C1473) — per-dialect parameterization, identifier validation, alias escaping, enum-keyword validation
 22. **Edge Cases** (C1700-C1716) — nulls, types, strategies, freshness, distinct+count, empty groups
 
-Total: **400 unique test IDs** × parameterization = ~**626 test executions** (sections 3–9: 113 IDs × 3 dialects + C505 × 1 = 340; other sections: 286 × 1 = 286; total = 626)
+Total: **406 unique test IDs** × parameterization = ~**632 test executions** (sections 3–9: 113 IDs × 3 dialects + C505 × 1 = 340; other sections: 292 × 1 = 292; total = 632)
 
 ---
 

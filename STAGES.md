@@ -98,7 +98,7 @@ This document breaks the concept into sequential implementation stages. Each sta
    - Rule 3: Role permission — table-level (`ACCESS_DENIED`)
    - Rule 4: Column permission — column-level (`ACCESS_DENIED`)
    - Rule 5: Filter validity — operator/type compatibility table, compound value validation (`INVALID_FILTER`, `INVALID_VALUE`), `isNull`/`isNotNull` requires `nullable: true`, array operator restrictions, `table` qualifier validation, `QueryColumnFilter` type/permission checks, `in`/`notIn` null element rejection, `between`/`notBetween` null bounds rejection, element type validation
-   - Rule 6: Join validity (`INVALID_JOIN`)
+   - Rule 6: Join validity — direct relation or transitive through already-joined tables (`INVALID_JOIN`)
    - Rule 7: Group By validity — ungrouped column check, array column rejection (`INVALID_GROUP_BY`)
    - Rule 8: Having validity — alias existence, `table` rejected, `QueryColumnFilter` rejected, `QueryExistsFilter` rejected, pattern/function/array operators rejected (`INVALID_HAVING`)
    - Rule 9: Order By validity — column/alias existence, array column rejection (`INVALID_ORDER_BY`)
@@ -112,7 +112,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Exit criteria:** All 14 rules enforced. `filterIndex` populated. Recursive nesting validated.
 
-**Test scenarios covered:** #15, #17, #18, #32, #34, #36, #37, #40–43, #46, #47, #65, #78, #82, #86–88, #97, #98, #107, #109, #116–123, #139–141, #143, #145, #146, #150, #151, #153, #154, #157–159, #165, #167–169, #173–180, #187, #190–192, #195, #198, #199, #229–232, #234, #235
+**Test scenarios covered:** #15, #17, #18, #32, #34, #36, #37, #40–43, #46, #47, #65, #78, #82, #86–88, #97, #98, #107, #109, #116–123, #139–141, #143, #145, #146, #150, #151, #153, #154, #157–159, #165, #167–169, #173–180, #187, #190–192, #195, #198, #199, #229–232, #234, #235, #243–252
 
 ---
 
@@ -174,16 +174,17 @@ This document breaks the concept into sequential implementation stages. Each sta
 6. Handle `columns: []` — aggregation-only query
 7. Handle `QueryJoin.columns: []` — join for filter/groupBy only
 8. Resolve `QueryFilter.table` qualifier — map to correct table alias
-9. Resolve `QueryExistsFilter` — correlated subquery with correct parent lookup for nested EXISTS
+9. Resolve `QueryExistsFilter` — correlated subquery with correct parent lookup for nested EXISTS; temporarily register subquery alias in `tableAliases` for sub-filter column resolution, restore after
 10. Resolve `QueryColumnFilter` — two `ColumnRef`s, no params
-11. Resolve filter operators to `WhereNode` variants (`WhereCondition`, `WhereBetween`, `WhereFunction`, `WhereArrayCondition`, `WhereGroup`, `WhereExists`, `WhereCountedSubquery`)
-12. Resolve `having` to `HavingNode` — bare alias strings, not `ColumnRef`
-13. Handle `byIds` → produce `WhereCondition` with `in` operator for PK column
-14. Handle `count` mode → override to `SELECT COUNT(*)`
+11. Resolve transitive joins — when no direct relation exists between join target and `from` table, search already-joined tables for an intermediary with a valid relation
+12. Resolve filter operators to `WhereNode` variants (`WhereCondition`, `WhereBetween`, `WhereFunction`, `WhereArrayCondition`, `WhereGroup`, `WhereExists`, `WhereCountedSubquery`)
+13. Resolve `having` to `HavingNode` — bare alias strings, not `ColumnRef`
+14. Handle `byIds` → produce `WhereCondition` with `in` operator for PK column
+15. Handle `count` mode → override to `SELECT COUNT(*)`
 
 **Exit criteria:** All query shapes produce correct `SqlParts` and `ColumnMapping[]`.
 
-**Test scenarios covered:** none directly (resolution is validated through SQL generation tests)
+**Test scenarios covered:** #253–258 (name resolver unit tests — transitive join ON, inner join, EXISTS alias, NOT EXISTS, count mode); additionally validated through SQL generation tests
 
 ---
 
@@ -221,7 +222,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Exit criteria:** All SQL generation tests pass for Postgres dialect.
 
-**Test scenarios covered (Postgres output):** #20–30, #45, #66–75, #77, #83–85, #90–94, #99–102, #108, #110–115, #124–129, #133–138, #142, #144, #147–149, #155–157, #160–164, #166, #181–186, #188–189, #193, #194, #196, #197, #200–207, #227
+**Test scenarios covered (Postgres output):** #20–30, #45, #66–75, #77, #83–85, #90–94, #99–102, #108, #110–115, #124–129, #133–138, #142, #144, #147–149, #155–157, #160–164, #166, #181–186, #188–189, #193, #194, #196, #197, #200–207, #227, #253–258
 
 ---
 

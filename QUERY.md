@@ -47,6 +47,10 @@ interface QueryJoin {
   type?: 'inner' | 'left'            // default: 'left' (safe for nullable FKs)
   columns?: string[]                  // columns to select from joined table; undefined = all allowed for role; [] = no columns (join used for filter/groupBy only)
   filters?: (QueryFilter | QueryColumnFilter | QueryFilterGroup | QueryExistsFilter)[]  // filters on joined table
+  // Join resolution: the joined table must have a relation to the `from` table OR to any
+  // already-joined table (transitive joins). For example, {from: 'users', joins: [{table: 'orders'},
+  // {table: 'invoices'}]} is valid if invoices→orders has a relation, even though invoices has no
+  // direct relation to users. The ON clause references the intermediary (orders), not the from table.
   // Within join filters, omitting `table` on a QueryFilter resolves the column against the **joined**
   // table (not the `from` table). This is the natural default — you're declaring filters *for* this join.
   // Specifying `table` explicitly overrides this and allows referencing any table in the query (from or any join).
@@ -76,6 +80,8 @@ interface QueryFilter {
 }
 
 // Column-vs-column comparison — right side is another column, not a literal value
+// Both columns must have compatible types: same type, or same type family
+// (numeric: int/decimal, temporal: date/timestamp). Cross-family rejected.
 interface QueryColumnFilter {
   column: string                      // left column apiName
   table?: string                      // left table apiName; omit for `from` table
