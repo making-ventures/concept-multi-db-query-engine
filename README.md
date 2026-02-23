@@ -208,7 +208,7 @@ Predefined masking functions:
 |---|---|---|
 | `email` | Show first char + domain hint | `john@example.com` → `j***@***.com` |
 | `phone` | Show country code + last 3 digits | `+1234567890` → `+1***890` |
-| `name` | Show first + last char | `John Smith` → `J*********h` |
+| `name` | Show first + last char | `John Smith` → `J********h` |
 | `uuid` | Show first 4 chars | `a1b2c3d4-...` → `a1b2****` |
 | `number` | Replace with `0` | `12345` → `0` |
 | `date` | Truncate to year | `2025-03-15` → `2025-01-01` |
@@ -880,7 +880,9 @@ This decouples the API contract from database schema evolution.
 | BETWEEN | `col BETWEEN $1 AND $2` | `col BETWEEN {p1:Type} AND {p2:Type}` | `col BETWEEN ? AND ?` |
 | NOT BETWEEN | `col NOT BETWEEN $1 AND $2` | `NOT (col BETWEEN {p1:Type} AND {p2:Type})` | `col NOT BETWEEN ? AND ?` |
 | Boolean | `true/false` | `1/0` | `true/false` |
-| Counted subquery | `(SELECT COUNT(*) FROM ... WHERE ...) >= $N` | `(SELECT COUNT(*) FROM ... WHERE ...) >= {pN:UInt64}` | `(SELECT COUNT(*) FROM ... WHERE ...) >= ?` |
+| Counted subquery (`=`/`!=`) | `(SELECT COUNT(*) FROM ... WHERE ...) = $N` | `(SELECT COUNT(*) FROM ... WHERE ...) = {pN:UInt64}` | `(SELECT COUNT(*) FROM ... WHERE ...) = ?` |
+| Counted subquery (`>=`/`>`) | `(SELECT COUNT(*) FROM (SELECT 1 ... LIMIT N)) >= $N` | `col IN (SELECT fk ... GROUP BY fk HAVING COUNT(*) >= {pN:UInt64})` | `col IN (SELECT fk ... GROUP BY fk HAVING COUNT(*) >= ?)` |
+| Counted subquery (`<`/`<=`) | `(SELECT COUNT(*) FROM ... WHERE ...) < $N` | `col NOT IN (SELECT fk ... GROUP BY fk HAVING COUNT(*) >= {pN:UInt64})` | `col NOT IN (SELECT fk ... GROUP BY fk HAVING COUNT(*) >= ?)` |
 | Array column type | `text[]`, `integer[]`, etc. | `Array(String)`, `Array(Int32)`, etc. | `array(varchar)`, `array(integer)`, etc. |
 | `arrayContains` | `$1 = ANY(col)` | `has(col, {p1})` | `contains(col, ?)` |
 | `arrayContainsAll` | `col @> $1::type[]` | `hasAll(col, [{p1}, ...])` | `cardinality(array_except(ARRAY[?,...], col)) = 0` |
@@ -888,7 +890,7 @@ This decouples the API contract from database schema evolution.
 | `arrayIsEmpty` | `cardinality(col) = 0` | `empty(col)` | `cardinality(col) = 0` |
 | `arrayIsNotEmpty` | `cardinality(col) > 0` | `notEmpty(col)` | `cardinality(col) > 0` |
 
-**Performance note — counted subqueries:** `COUNT(*)` scans all matching rows even when only a threshold is needed. For `>= N` / `> N` comparisons, the system can optimize by adding `LIMIT N` inside the subquery: `(SELECT COUNT(*) FROM (SELECT 1 FROM ... WHERE ... LIMIT N)) >= N`. This short-circuits counting once the threshold is reached. Not applied for `=` / `!=` / `<` / `<=` (which need the exact count). The optimization is per-dialect and transparent to the caller.
+**Performance note — counted subqueries:** For `>=` / `>` comparisons, each dialect optimizes to avoid scanning all rows. **Postgres** wraps in a `LIMIT`-ed inner query: `(SELECT COUNT(*) FROM (SELECT 1 FROM ... LIMIT N)) >= N`, short-circuiting once the threshold is reached. **ClickHouse** and **Trino** decorrelate into semi-joins: `col IN (SELECT fk GROUP BY fk HAVING COUNT(*) >= N)`, avoiding correlated sub-selects entirely. For `<` / `<=`, CH/Trino invert with `NOT IN` and a flipped `HAVING` operator — this correctly includes parent rows with zero matching children (which a correlated `COUNT(*)` comparison would also include). For `=` / `!=` the exact count is needed; all dialects use standard correlated `(SELECT COUNT(*) FROM ...) = N`.
 
 **Postgres `in`/`notIn` type mapping:** The `= ANY($1::type[])` syntax requires an explicit array type cast. The system maps `ColumnType` → SQL type:
 
