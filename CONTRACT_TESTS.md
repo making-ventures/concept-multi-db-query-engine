@@ -1203,7 +1203,7 @@ For implementation developers, verify the following groups pass in order:
 22. **Edge Cases** (C1700-C1716) — nulls, types, strategies, freshness, distinct+count, empty groups
 23. **Executor Contract** (C1800-C1804) — ping, execute, close, error wrapping for any `DbExecutor` implementation
 
-Total: **420 unique test IDs** × parameterization = ~**661 test executions** (sections 3–9: 113 IDs × 3 dialects + C505 × 1 = 340; other sections: 306 × 1 = 306; section 23: C1800-C1804 × 3 executors = 15; total = 661)
+Total: **420 unique test IDs** × parameterization = ~**656 test executions** (sections 5–11: 113 IDs × 3 dialects + C505 × 1 = 340; section 23: 5 IDs × 3 executors = 15; remaining 301 IDs × 1 = 301; total = 656)
 
 ---
 

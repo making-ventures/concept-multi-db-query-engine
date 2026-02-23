@@ -417,7 +417,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 | 14 | all | Final verification | — |
 | **Total** | | | **289** |
 
-\* Per-stage counts sum to 290 because #157 appears in both Stage 4 (validation) and Stage 8 (SQL generation). Unique total: 289 = 284 integer-numbered scenarios (#1–#289, with gaps) + 5 sub-variants (#14b, #14c, #14d, #14e, #14f).
+\* #157 appears in both Stage 4 (validation) and Stage 8 (SQL generation); it is counted once (Stage 4). Sub-variants #14b–#14f expand scenario #14 but are not counted separately.
 
 **Dependency graph:**
 

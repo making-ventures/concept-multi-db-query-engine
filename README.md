@@ -589,7 +589,7 @@ HTTP API contract (endpoints, error status codes), `MultiDbClient` configuration
 
 ## Contract Test Suite
 
-Full HTTP contract test suite (420 test IDs × 3 dialects) defining behavioral correctness for any conforming `@mkven/multi-db-query` server implementation.
+Full contract test suite (420 unique test IDs, ~656 parameterized executions) defining behavioral correctness for any conforming `@mkven/multi-db-query` server implementation.
 
 → See [CONTRACT_TESTS.md](./CONTRACT_TESTS.md)
 
@@ -705,6 +705,7 @@ Sequential implementation stages — each produces a working, testable increment
 │   │       ├── validationContract.ts # describeValidationContract
 │   │       ├── errorContract.ts     # describeErrorContract
 │   │       ├── edgeCaseContract.ts  # describeEdgeCaseContract
+│   │       ├── executorContract.ts  # describeExecutorContract
 │   │       ├── healthLifecycleContract.ts # describeHealthLifecycleContract
 │   │       └── injectionContract.ts # describeInjectionContract
 │   │
