@@ -78,6 +78,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 17 | Invalid table name | nonexistent | rule 1 — UNKNOWN_TABLE |
 | 18 | Invalid column name | orders.nonexistent | rule 2 — UNKNOWN_COLUMN |
 | 32 | Invalid join (no relation) | orders + metrics | rule 6 — INVALID_JOIN |
+| 246 | Transitive join valid | users + orders + invoices (invoices→orders→users) | no error — invoices has relation to orders, which is already joined |
+| 247 | Transitive join no path | users + orders + metrics (metrics has no relation to any joined table) | rule 6 — INVALID_JOIN |
 | 34 | Multiple validation errors | from: 'nonexistent', column: 'bad', filter on 'missing' | multi-error collection |
 | 36 | Invalid limit/offset | orders limit: -1 | rule 11 — INVALID_LIMIT |
 | 37 | byIds + aggregations | users byIds + GROUP BY | rule 10 — INVALID_BY_IDS |
@@ -103,6 +105,9 @@ Tests are split between packages. Validation package tests run without DB connec
 | 116 | `between` on boolean | orders WHERE isPaid between { from: true, to: false } | rule 5 — INVALID_FILTER (boolean not orderable) |
 | 117 | `contains` on non-string | orders WHERE total contains '100' | rule 5 — INVALID_FILTER (decimal column) |
 | 118 | Column filter type mismatch | orders WHERE total(decimal) > status(string) | rule 5 — INVALID_FILTER (incompatible types) |
+| 243 | refColumn cross-family rejected (decimal vs string) | orders WHERE total(decimal) > status(string) refColumn | rule 5 — INVALID_FILTER (numeric vs string — different type families) |
+| 244 | refColumn numeric family compatible (int ↔ decimal) | orders WHERE total(decimal) > quantity(int) refColumn | no error — int and decimal are in the same numeric family |
+| 245 | refColumn temporal family compatible (date ↔ timestamp) | invoices WHERE issuedAt(timestamp) > dueDate(date) refColumn | no error — date and timestamp are in the same temporal family |
 | 119 | Column filter on denied column | orders WHERE internalNote > status (tenant-user) | rule 4 — ACCESS_DENIED (column in filter) |
 | 120 | `between` malformed value | orders WHERE total between { from: 100 } (missing `to`) | rule 5 — INVALID_VALUE (malformed compound value) |
 | 121 | `levenshteinLte` negative maxDistance | users WHERE lastName levenshteinLte { text: 'x', maxDistance: -1 } | rule 5 — INVALID_VALUE (maxDistance must be non-negative integer) |
@@ -116,6 +121,8 @@ Tests are split between packages. Validation package tests run without DB connec
 | 146 | `notIn` on timestamp column | orders WHERE createdAt notIn ['2024-01-01'] | rule 5 — `notIn` rejected on `timestamp` type |
 | 150 | `in` with null element | orders WHERE status IN ('active', null) | rule 5 — INVALID_VALUE: null in `in`/`notIn` array rejected (NOT IN + NULL = 0 rows) |
 | 151 | QueryColumnFilter in HAVING group | orders GROUP BY status, HAVING group with QueryColumnFilter { column: 'totalSum', refColumn: 'avgTotal' } | rule 8 — HAVING rejects `QueryColumnFilter` (aliases, not table columns) |
+| 248 | Top-level QueryColumnFilter in HAVING | orders GROUP BY status, HAVING { column: 'cnt', refColumn: 'cnt' } (no group wrapper) | rule 8 — HAVING rejects `QueryColumnFilter` at top level, not just inside groups |
+| 249 | Top-level QueryExistsFilter in HAVING | orders GROUP BY status, HAVING { table: 'users', exists: true } (no group wrapper) | rule 8 — HAVING rejects `QueryExistsFilter` at top level, not just inside groups |
 | 153 | `contains` operator in HAVING | orders GROUP BY status, HAVING { column: 'totalSum', operator: 'contains', value: '100' } | rule 8 — INVALID_HAVING: pattern operators rejected in HAVING |
 | 154 | `levenshteinLte` in HAVING | orders GROUP BY status, HAVING { column: 'totalSum', operator: 'levenshteinLte', value: { text: '100', maxDistance: 1 } } | rule 8 — INVALID_HAVING: function operators rejected in HAVING |
 | 165 | Nested EXISTS (invalid relation) | orders EXISTS(invoices WHERE EXISTS(users WHERE role='admin')) | rule 12 — INVALID_EXISTS: inner EXISTS resolves `users` against `invoices` (outer EXISTS), not `orders`; invoices has no relation to users → rejected |
@@ -169,6 +176,9 @@ Tests are split between packages. Validation package tests run without DB connec
 | 104 | Empty roles array | orders (user: []) | zero roles → zero permissions → ACCESS_DENIED |
 | 106 | Cross-scope masking | orders (user: [regional-manager], service: [svc-role w/ maskedColumns: ['total']]) | user scope unmasks total, service scope masks it → stays masked (scope intersection) |
 | 233 | Aggregation alias unmasked | orders (tenant-user): GROUP BY status, SUM(total) as totalSum | totalSum `masked: false` — aggregation aliases never masked even when source column has `maskingFn: 'number'` |
+| 250 | Multi-scope with denied scope | orders (user: [], service: ['orders-service']) | user scope denied (zero roles) → ACCESS_DENIED even though service scope allows |
+| 251 | Multi-scope disjoint columns | users (user: [scope-a: id+firstName], service: [scope-b: email+age]) | intersection of disjoint column sets → empty → ACCESS_DENIED on every column |
+| 252 | Multi-scope wildcard ∩ specific | users (user: ['admin'], service: ['restricted': id+firstName]) | wildcard intersected with specific → restricted to id+firstName; requesting 'email' → ACCESS_DENIED |
 
 #### `packages/core/tests/planner/` — strategy selection (P0–P4)
 
@@ -262,6 +272,12 @@ Tests are split between packages. Validation package tests run without DB connec
 | 137 | `notIcontains` filter | users WHERE email notIcontains 'SPAM' | dialect-specific case-insensitive `NOT LIKE '%SPAM%'` |
 | 138 | Top-level filter on joined column | orders JOIN products, top-level filter: { column: 'category', table: 'products', operator: '=', value: 'electronics' } | `t1."category" = $1` in WHERE (same as QueryJoin.filters) |
 | 142 | INNER JOIN | orders INNER JOIN products | `INNER JOIN` clause (vs default LEFT) |
+| 253 | Transitive join ON columns | users + orders + invoices | invoices JOIN ON references orders alias (`t1."id" = t2."order_id"`), not users (`t0`) |
+| 254 | Inner join type preserved | orders INNER JOIN users | `INNER JOIN` emitted, join type from definition carried through resolver |
+| 255 | EXISTS sub-filter alias resolution | users EXISTS(orders WHERE status='paid') | sub-filter column uses subquery alias (`s1."order_status"`), not `from` alias (`t0`) |
+| 256 | EXISTS on already-joined table restores alias | users JOIN orders, EXISTS(orders WHERE total>100) | join uses `t1`, EXISTS subquery uses `s2`; after EXISTS, join columns still reference `t1` |
+| 257 | NOT EXISTS | users NOT EXISTS orders | `NOT EXISTS (SELECT 1 FROM orders t1 WHERE ...)` |
+| 258 | EXISTS count mode | users EXISTS orders count: { operator: '>=', value: 3 } | `(SELECT COUNT(*) FROM orders ... ) >= $N` — `WhereCountedSubquery` IR |
 | 144 | NOT in HAVING group | orders GROUP BY status, HAVING NOT (SUM(total) > 100 OR COUNT(*) > 5) | `NOT (HAVING_cond1 OR HAVING_cond2)` — negated HAVING group |
 | 147 | Multi-join with per-table filters | orders JOIN products (category='electronics') JOIN users (role='admin') | 2 JOINs + 2 WHERE conditions from joined tables |
 | 148 | Filter with `table` = `from` table | orders, filter: { column: 'status', table: 'orders', operator: '=', value: 'active' } | `t0."order_status" = $1` — explicit from-table reference, same as omitting `table` |
