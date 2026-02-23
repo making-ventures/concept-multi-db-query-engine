@@ -642,7 +642,8 @@ Sequential implementation stages — each produces a working, testable increment
 │   │   └── tests/
 │   │       ├── fixtures/
 │   │       │   └── testConfig.ts     # shared test config (metadata, roles, tables)
-│   │       ├── errors.test.ts       # error class construction + toJSON serialization (34 tests)
+│   │       ├── errors/
+│   │       │   └── errors.test.ts    # error class construction + toJSON serialization (34 tests)
 │   │       ├── config/              # scenarios 49–52, 80, 81, 89, 96
 │   │       └── query/               # scenarios 15, 17, 18, 32, 34, 36, 37, 40–43, 46, 47, 65, 78, 82, 86–88, 97, 98, 107, 109, 116–123, 139–141, 143, 145, 146, 150, 151, 153, 154, 157–159, 165, 167–169, 173–180, 187, 190–192, 195, 198, 199, 229–232, 234, 235
 │   │
