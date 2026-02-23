@@ -15,7 +15,7 @@ Build a reusable, metadata-driven query engine that lets applications query, fil
 - Provides **structured debug logs** for transparent pipeline tracing
 - Supports **hot-reload** of metadata and roles, **health checks** for all providers, and graceful **shutdown**
 
-The monorepo ships a standalone **validation package** (`@mkven/multi-db-validation`) with **zero I/O dependencies** — clients can validate configs and queries locally before sending to the server. The core package (`@mkven/multi-db-query`) depends on it and adds planning, SQL generation, and masking, also with zero I/O deps. An **HTTP client package** (`@mkven/multi-db-client`) provides a pure runtime HTTP client with zero devDependencies. A separate **contract package** (`@mkven/multi-db-contract`) exports 6 parameterized test suites (query, validation, error, edge-case, health/lifecycle, injection) — they run against both in-process and HTTP implementations. A private **contract-tests package** (`@mkven/multi-db-contract-tests`) wires those suites to real executors. Database drivers and cache clients live in separate executor/cache packages.
+The monorepo ships a standalone **validation package** (`@mkven/multi-db-validation`) with **zero I/O dependencies** — clients can validate configs and queries locally before sending to the server. The core package (`@mkven/multi-db-query`) depends on it and adds planning, SQL generation, and masking, also with zero I/O deps. An **HTTP client package** (`@mkven/multi-db-client`) provides a pure runtime HTTP client with zero devDependencies. A separate **contract package** (`@mkven/multi-db-contract`) exports 7 parameterized test suites (query, validation, error, edge-case, health/lifecycle, injection, executor) — they run against both in-process and HTTP implementations. A private **contract-tests package** (`@mkven/multi-db-contract-tests`) wires those suites to real executors. Database drivers and cache clients live in separate executor/cache packages.
 
 ## Target Databases
 
@@ -525,7 +525,7 @@ Test databases, tables, columns, relations, roles, and the full test scenario ca
 | `close()` error handling | Attempt all providers, collect failures, throw aggregate error | Partial close would leak connections — always try all, report all failures |
 | Array columns | `ScalarColumnType` + `ArrayColumnType` union, 5 array operators, element type derived by stripping `[]` | All three backends (Postgres, ClickHouse, Trino/Iceberg) support arrays natively. Element type validation reuses `ScalarColumnType`. Array columns excluded from `QueryColumnFilter`, `sum`/`avg`/`min`/`max` aggregations, `groupBy`, and `orderBy` (dialect-inconsistent behavior) |
 | HTTP client | Thin typed wrapper over `fetch`; zero devDependencies | Pure runtime package. Native `fetch` = zero HTTP deps, works in Node 18+, Bun, Deno, browsers |
-| Contract testing | 6 parameterized suites in `@mkven/multi-db-contract`; private `@mkven/multi-db-contract-tests` wires them to real executors | Same suites verify both `MultiDb` (direct) and `MultiDbClient` (HTTP) — catches serialization drift, error mapping mismatches, and behavioral divergence |
+| Contract testing | 7 parameterized suites in `@mkven/multi-db-contract`; private `@mkven/multi-db-contract-tests` wires them to real executors | Same suites verify both `MultiDb` (direct) and `MultiDbClient` (HTTP) — catches serialization drift, error mapping mismatches, and behavioral divergence |
 
 
 ---
@@ -541,7 +541,7 @@ Test databases, tables, columns, relations, roles, and the full test scenario ca
 | `@mkven/multi-db-executor-trino` | Trino connection + execution | `trino-client` |
 | `@mkven/multi-db-cache-redis` | Redis cache provider (Debezium-synced) | `ioredis` |
 | `@mkven/multi-db-client` | Typed HTTP client | `@mkven/multi-db-validation` (types, errors; uses native `fetch`) |
-| `@mkven/multi-db-contract` | Contract test suites (6 `describe*Contract` functions) | `@mkven/multi-db-client`, `@mkven/multi-db-query`, `@mkven/multi-db-validation`, `vitest` |
+| `@mkven/multi-db-contract` | Contract test suites (7 `describe*Contract` functions) | `@mkven/multi-db-client`, `@mkven/multi-db-query`, `@mkven/multi-db-validation`, `vitest` |
 | `@mkven/multi-db-contract-tests` | Wires contract suites to real executors (private) | `@mkven/multi-db-contract`, `@mkven/multi-db-query`, executor/cache packages |
 
 All error classes (including runtime ones like `ExecutionError`, `PlannerError`, `ConnectionError`) live in the validation package so that client code can use `instanceof` checks and access typed error fields without depending on the core package. The validation package is a type+error+validation-only package — it contains no I/O, no planner, no SQL generators.

@@ -371,7 +371,7 @@ This document breaks the concept into sequential implementation stages. Each sta
    - Optional `validateBeforeSend` with local `validateQuery()` call
 2. Implement error reconstruction — HTTP status + body → `ValidationError`, `PlannerError`, `ExecutionError`, `ConnectionError`, `ProviderError`
 3. Implement `QueryContract` interface in `@mkven/multi-db-contract`
-4. Implement 6 `describe*Contract()` suites in `@mkven/multi-db-contract` — query, validation, error, edge-case, health/lifecycle, injection
+4. Implement 7 `describe*Contract()` suites in `@mkven/multi-db-contract` — query, validation, error, edge-case, health/lifecycle, injection, executor
 5. Wire contract suites to real executors in `@mkven/multi-db-contract-tests` (private package)
 
 **Exit criteria:** HTTP client sends/receives correctly. Contract tests pass for both in-process and HTTP implementations.
@@ -404,7 +404,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 | 1 | all | Scaffold + types | — |
 | 2 | validation | Error classes | — |
 | 3 | validation | Config validation | 8 |
-| 4 | validation | Query validation (14 rules) | 69 |
+| 4 | validation | Query validation (14 rules) | 79 |
 | 5 | core | Metadata registry + providers | 3 |
 | 6 | core | Access control + masking | 12 |
 | 7 | core | Name resolution | — |
