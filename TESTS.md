@@ -342,7 +342,7 @@ Tests are split between packages. Validation package tests run without DB connec
 
 #### `packages/client/tests/contract/` — contract tests (same suite, both implementations)
 
-These are the core smoke tests implemented inline. The **full contract test suite** (401 test IDs × 3 dialects for sections 3–9 ≈ 627 test executions) is documented in [`CONTRACT_TESTS.md`](../multi-db/CONTRACT_TESTS.md) — a standalone spec for implementation developers building compatible servers in any language.
+These are the core smoke tests implemented inline. The **full contract test suite** (401 test IDs × 3 dialects for sections 3–9 ≈ 627 test executions) is documented in [`CONTRACT_TESTS.md`](./CONTRACT_TESTS.md) — a standalone spec for implementation developers building compatible servers in any language.
 
 | # | Scenario | Input | Contract assertion |
 |---|---|---|---|

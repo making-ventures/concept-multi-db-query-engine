@@ -584,6 +584,22 @@ HTTP API contract (endpoints, error status codes), `MultiDbClient` configuration
 
 ---
 
+## Contract Test Suite
+
+Full HTTP contract test suite (401 test IDs × 3 dialects) defining behavioral correctness for any conforming `@mkven/multi-db-query` server implementation.
+
+→ See [CONTRACT_TESTS.md](./CONTRACT_TESTS.md)
+
+---
+
+## Cross-Database Behavior Normalization
+
+Documents three categories of cross-database divergence (Postgres vs ClickHouse vs Trino) and the normalization rules applied to ensure consistent query results.
+
+→ See [CROSS_DB_NORMALIZATION.md](./CROSS_DB_NORMALIZATION.md)
+
+---
+
 ## Project Structure
 
 ```
