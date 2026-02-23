@@ -15,7 +15,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 **Tasks:**
 1. Init pnpm workspace, root `package.json`, `pnpm-workspace.yaml`
 2. Root configs: `tsconfig.json`, `biome.json`, `vitest.config.ts`
-3. Create package directories for all 7 packages (validation, core, 3 executors, cache-redis, client)
+3. Create package directories for all 9 packages (validation, core, 3 executors, cache-redis, client, contract, contract-tests)
 4. Per-package `package.json` + `tsconfig.json` with correct `references`
 5. Define all types in `packages/validation/src/types/`:
    - `metadata.ts` — `DatabaseEngine`, `DatabaseMeta`, `TableMeta`, `ColumnMeta`, `ScalarColumnType`, `ArrayColumnType`, `ColumnType`, `RelationMeta`, `ExternalSync`, `CacheMeta`, `CachedTableMeta`, `MetadataConfig`, `RoleMeta`, `TableRoleAccess`
@@ -357,22 +357,21 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 ## Stage 13 — HTTP Client & Contract Tests
 
-**Goal:** Implement the HTTP client package and shared contract test suite.
+**Goal:** Implement the HTTP client package, extract contract test suites, and wire them to real executors.
 
-**Package:** `@mkven/multi-db-client`
+**Packages:** `@mkven/multi-db-client`, `@mkven/multi-db-contract`, `@mkven/multi-db-contract-tests`
 
 **Tasks:**
-1. Implement `createMultiDbClient(config)`:
+1. Implement `createMultiDbClient(config)` in `@mkven/multi-db-client`:
    - `query()` → POST `/query`, deserialize `QueryResult` by `kind`
    - `healthCheck()` → GET `/health`
    - Error deserialization — reconstruct typed error classes from `toJSON()` body using `code` field
    - Custom headers, injectable `fetch`, timeout via `AbortController`
    - Optional `validateBeforeSend` with local `validateQuery()` call
 2. Implement error reconstruction — HTTP status + body → `ValidationError`, `PlannerError`, `ExecutionError`, `ConnectionError`, `ProviderError`
-3. Implement `QueryContract` interface
-4. Implement `describeQueryContract(name, factory)` — parameterized test suite:
-   - Simple select, filter + join, aggregation, validation error, access denied, count mode, SQL-only mode
-5. Write in-process factory and HTTP client factory for contract tests
+3. Implement `QueryContract` interface in `@mkven/multi-db-contract`
+4. Implement 6 `describe*Contract()` suites in `@mkven/multi-db-contract` — query, validation, error, edge-case, health/lifecycle, injection
+5. Wire contract suites to real executors in `@mkven/multi-db-contract-tests` (private package)
 
 **Exit criteria:** HTTP client sends/receives correctly. Contract tests pass for both in-process and HTTP implementations.
 
@@ -413,7 +412,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 | 10 | core | Query planner (P0–P4) | 21 |
 | 11 | executor-*, cache-redis | DB executors + Redis cache | — |
 | 12 | core | Full pipeline + lifecycle | 20 |
-| 13 | client | HTTP client + contract tests | 19 |
+| 13 | client, contract, contract-tests | HTTP client + contract suites + wiring | 19 |
 | 14 | all | Final verification | — |
 | **Total** | | | **240** |
 

@@ -30,9 +30,11 @@ interface QueryContract {
 }
 ```
 
-The TypeScript reference implementation provides a parameterized test suite via `describeQueryContract()`. Each implementation provides a factory function:
+The `@mkven/multi-db-contract` package exports 6 parameterized test suites: `describeQueryContract()`, `describeValidationContract()`, `describeErrorContract()`, `describeEdgeCaseContract()`, `describeHealthLifecycleContract()`, and `describeInjectionContract()`. Each implementation provides a factory function:
 
 ```ts
+import { describeQueryContract } from '@mkven/multi-db-contract'
+
 // In-process (TypeScript reference)
 describeQueryContract('direct', async () => {
   const multiDb = await createMultiDb({ ... })
@@ -60,6 +62,7 @@ interface ValidationContract {
 These tests require zero database I/O. `describeValidationContract()` accepts the contract, plus the fixture metadata and roles:
 
 ```ts
+import { describeValidationContract } from '@mkven/multi-db-contract'
 describeValidationContract(
   'direct',
   async () => { /* return ValidationContract impl */ },
@@ -71,6 +74,8 @@ describeValidationContract(
 ### Test Fixture Requirements
 
 The server under test **must** be configured with the metadata, roles, and seed data described in the [Fixture](#fixture) section before running the suite. The fixture is deterministic and self-contained — no external dependencies.
+
+The private `@mkven/multi-db-contract-tests` package wires these suites to real executors (Postgres, ClickHouse, Trino) for integration testing.
 
 ### Assertions
 

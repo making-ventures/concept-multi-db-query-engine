@@ -15,7 +15,7 @@ Build a reusable, metadata-driven query engine that lets applications query, fil
 - Provides **structured debug logs** for transparent pipeline tracing
 - Supports **hot-reload** of metadata and roles, **health checks** for all providers, and graceful **shutdown**
 
-The monorepo ships a standalone **validation package** (`@mkven/multi-db-validation`) with **zero I/O dependencies** — clients can validate configs and queries locally before sending to the server. The core package (`@mkven/multi-db-query`) depends on it and adds planning, SQL generation, and masking, also with zero I/O deps. An **HTTP client package** (`@mkven/multi-db-client`) provides a typed client and a contract test suite — the same tests run against both in-process and HTTP implementations. Database drivers and cache clients live in separate executor/cache packages.
+The monorepo ships a standalone **validation package** (`@mkven/multi-db-validation`) with **zero I/O dependencies** — clients can validate configs and queries locally before sending to the server. The core package (`@mkven/multi-db-query`) depends on it and adds planning, SQL generation, and masking, also with zero I/O deps. An **HTTP client package** (`@mkven/multi-db-client`) provides a pure runtime HTTP client with zero devDependencies. A separate **contract package** (`@mkven/multi-db-contract`) exports 6 parameterized test suites (query, validation, error, edge-case, health/lifecycle, injection) — they run against both in-process and HTTP implementations. A private **contract-tests package** (`@mkven/multi-db-contract-tests`) wires those suites to real executors. Database drivers and cache clients live in separate executor/cache packages.
 
 ## Target Databases
 
@@ -524,8 +524,9 @@ Test databases, tables, columns, relations, roles, and the full test scenario ca
 | Concurrent safety | `query()` uses snapshot of metadata/roles; `reload*()` atomically swaps references | No locking needed — immutable config per query, atomic reference swap for reloads |
 | `close()` error handling | Attempt all providers, collect failures, throw aggregate error | Partial close would leak connections — always try all, report all failures |
 | Array columns | `ScalarColumnType` + `ArrayColumnType` union, 5 array operators, element type derived by stripping `[]` | All three backends (Postgres, ClickHouse, Trino/Iceberg) support arrays natively. Element type validation reuses `ScalarColumnType`. Array columns excluded from `QueryColumnFilter`, `sum`/`avg`/`min`/`max` aggregations, `groupBy`, and `orderBy` (dialect-inconsistent behavior) |
-| HTTP client | Thin typed wrapper over `fetch`; contract tests shared with in-process engine | Same test suite verifies both `MultiDb` (direct) and `MultiDbClient` (HTTP) — catches serialization drift, error mapping mismatches, and behavioral divergence. Native `fetch` = zero HTTP deps, works in Node 18+, Bun, Deno, browsers |
-| Contract testing | Parameterized test suite with factory function per implementation | Write once, run against any `QueryContract` — avoids duplicating integration tests for each transport |
+| HTTP client | Thin typed wrapper over `fetch`; zero devDependencies | Pure runtime package. Native `fetch` = zero HTTP deps, works in Node 18+, Bun, Deno, browsers |
+| Contract testing | 6 parameterized suites in `@mkven/multi-db-contract`; private `@mkven/multi-db-contract-tests` wires them to real executors | Same suites verify both `MultiDb` (direct) and `MultiDbClient` (HTTP) — catches serialization drift, error mapping mismatches, and behavioral divergence |
+
 
 ---
 
@@ -539,7 +540,9 @@ Test databases, tables, columns, relations, roles, and the full test scenario ca
 | `@mkven/multi-db-executor-clickhouse` | ClickHouse connection + execution | `@clickhouse/client` |
 | `@mkven/multi-db-executor-trino` | Trino connection + execution | `trino-client` |
 | `@mkven/multi-db-cache-redis` | Redis cache provider (Debezium-synced) | `ioredis` |
-| `@mkven/multi-db-client` | Typed HTTP client + contract test suite | `@mkven/multi-db-validation` (types, errors; uses native `fetch`) |
+| `@mkven/multi-db-client` | Typed HTTP client | `@mkven/multi-db-validation` (types, errors; uses native `fetch`) |
+| `@mkven/multi-db-contract` | Contract test suites (6 `describe*Contract` functions) | `@mkven/multi-db-client`, `@mkven/multi-db-query`, `@mkven/multi-db-validation`, `vitest` |
+| `@mkven/multi-db-contract-tests` | Wires contract suites to real executors (private) | `@mkven/multi-db-contract`, `@mkven/multi-db-query`, executor/cache packages |
 
 All error classes (including runtime ones like `ExecutionError`, `PlannerError`, `ConnectionError`) live in the validation package so that client code can use `instanceof` checks and access typed error fields without depending on the core package. The validation package is a type+error+validation-only package — it contains no I/O, no planner, no SQL generators.
 
@@ -578,7 +581,7 @@ Core has **zero I/O dependencies** — usable for SQL-only mode without any DB d
 
 ## HTTP Client & Contract Testing
 
-HTTP API contract (endpoints, error status codes), `MultiDbClient` configuration, error deserialization, local validation, and the contract test suite (`QueryContract` interface).
+HTTP API contract (endpoints, error status codes), `MultiDbClient` configuration, error deserialization, and local validation. Contract test suites live in `@mkven/multi-db-contract`.
 
 → See [HTTP_CLIENT.md](./HTTP_CLIENT.md)
 
@@ -686,15 +689,31 @@ Sequential implementation stages — each produces a working, testable increment
 │   ├── client/                      # @mkven/multi-db-client
 │   │   ├── package.json
 │   │   ├── tsconfig.json
-│   │   └── src/
-│   │       ├── index.ts             # public API: createMultiDbClient, MultiDbClient, MultiDbClientConfig
-│   │       ├── client.ts            # HTTP client implementation (fetch-based)
-│   │       ├── errors.ts            # error deserialization — toJSON() → typed error class reconstruction
-│   │       └── contract/
-│   │           └── queryContract.ts  # describeQueryContract — parameterized contract test suite
+│   │   ├── src/
+│   │   │   ├── index.ts             # public API: createMultiDbClient, MultiDbClient, MultiDbClientConfig
+│   │   │   ├── client.ts            # HTTP client implementation (fetch-based)
+│   │   │   └── errors.ts            # error deserialization — toJSON() → typed error class reconstruction
 │   │   └── tests/
-│   │       ├── client/              # scenarios 208–218, 226
-│   │       └── contract/            # scenarios 219–225, 236–238
+│   │       └── client/              # scenarios 208–218, 226
+│   │
+│   ├── contract/                    # @mkven/multi-db-contract
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   └── src/
+│   │       ├── index.ts
+│   │       ├── queryContract.ts     # describeQueryContract
+│   │       ├── validationContract.ts # describeValidationContract
+│   │       ├── errorContract.ts     # describeErrorContract
+│   │       ├── edgeCaseContract.ts  # describeEdgeCaseContract
+│   │       ├── healthLifecycleContract.ts # describeHealthLifecycleContract
+│   │       └── injectionContract.ts # describeInjectionContract
+│   │
+│   ├── contract-tests/              # @mkven/multi-db-contract-tests (private)
+│   │   ├── package.json
+│   │   ├── tsconfig.json
+│   │   └── tests/
+│   │       ├── contract/            # scenarios 219–225, 236–238 — wires suites to real executors
+│   │       └── injection/           # SQL injection contract tests (unit mode)
 │   │
 │   ├── executor-postgres/           # @mkven/multi-db-executor-postgres
 │   │   ├── package.json

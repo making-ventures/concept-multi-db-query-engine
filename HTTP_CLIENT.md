@@ -84,7 +84,7 @@ Key behaviors:
 
 ### Contract Testing
 
-Both `MultiDb` (in-process) and `MultiDbClient` (HTTP) implement the same query surface. The package exports a **contract test suite** that runs against both:
+Both `MultiDb` (in-process) and `MultiDbClient` (HTTP) implement the same query surface. The `@mkven/multi-db-contract` package exports **contract test suites** that run against both:
 
 ```ts
 // Shared contract — both implementations satisfy this
@@ -99,7 +99,7 @@ interface QueryContract {
 Contract tests are parameterized by a factory function:
 
 ```ts
-// packages/client/src/contract/queryContract.ts
+// packages/contract/src/queryContract.ts
 export function describeQueryContract(name: string, factory: () => Promise<QueryContract>) {
   describe(`QueryContract: ${name}`, () => {
     let engine: QueryContract
@@ -144,4 +144,6 @@ describeQueryContract('http-client', async () => {
 ```
 
 This ensures both implementations behave identically — same results, same errors, same metadata structure. Catches serialization drift (e.g. `Date` vs ISO string), error mapping mismatches, and behavioral divergence before they reach production.
+
+The private `@mkven/multi-db-contract-tests` package wires these suites to the real executors for integration testing.
 
