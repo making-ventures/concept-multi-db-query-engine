@@ -376,24 +376,24 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 **Exit criteria:** HTTP client sends/receives correctly. Contract tests pass for both in-process and HTTP implementations.
 
-**Test scenarios covered:** #208–218, #219–225, #226
+**Test scenarios covered:** #208–218, #219–225, #226, #236–242
 
 ---
 
 ## Stage 14 — Final Verification
 
-**Goal:** Run all 235 test scenarios together, verify cross-stage integration, and confirm no regressions.
+**Goal:** Run all 258 test scenarios together, verify cross-stage integration, and confirm no regressions.
 
 **Package:** all
 
 **Tasks:**
 1. Run full test suite across all packages — `pnpm test` at monorepo root
-2. Verify all 240 unique scenarios pass — some appear in multiple packages (e.g. #157 is validated in both validation/query and core/generator)
+2. Verify all 263 unique scenarios pass — some appear in multiple packages (e.g. #157 is validated in both validation/query and core/generator)
 3. Smoke-test the full pipeline end-to-end: init → query → reload → healthCheck → close
 4. Verify `pnpm build` produces clean packages with correct dependency graph
 5. Review test coverage gaps — any untested code paths surfaced by coverage reports
 
-**Exit criteria:** All 240 test scenarios pass across all packages. Build succeeds. No regressions.
+**Exit criteria:** All 263 test scenarios pass across all packages. Build succeeds. No regressions.
 
 ---
 
@@ -413,11 +413,11 @@ This document breaks the concept into sequential implementation stages. Each sta
 | 10 | core | Query planner (P0–P4) | 21 |
 | 11 | executor-*, cache-redis | DB executors + Redis cache | — |
 | 12 | core | Full pipeline + lifecycle | 20 |
-| 13 | client, contract, contract-tests | HTTP client + contract suites + wiring | 19 |
+| 13 | client, contract, contract-tests | HTTP client + contract suites + wiring | 26 |
 | 14 | all | Final verification | — |
-| **Total** | | | **240** |
+| **Total** | | | **263** |
 
-\* Per-stage counts sum to 241 because #157 appears in both Stage 4 (validation) and Stage 8 (SQL generation). Unique total: 240 = 235 integer-numbered scenarios (#1–#235) + 5 sub-variants (#14b, #14c, #14d, #14e, #14f).
+\* Per-stage counts sum to 264 because #157 appears in both Stage 4 (validation) and Stage 8 (SQL generation). Unique total: 263 = 258 integer-numbered scenarios (#1–#258) + 5 sub-variants (#14b, #14c, #14d, #14e, #14f).
 
 **Dependency graph:**
 

@@ -1188,7 +1188,7 @@ For implementation developers, verify the following groups pass in order:
 21. **SQL Injection** (C1400-C1473) — per-dialect parameterization, identifier validation, alias escaping, enum-keyword validation
 22. **Edge Cases** (C1700-C1716) — nulls, types, strategies, freshness, distinct+count, empty groups
 
-Total: **406 unique test IDs** × parameterization = ~**632 test executions** (sections 3–9: 113 IDs × 3 dialects + C505 × 1 = 340; other sections: 292 × 1 = 292; total = 632)
+Total: **415 unique test IDs** × parameterization = ~**641 test executions** (sections 3–9: 113 IDs × 3 dialects + C505 × 1 = 340; other sections: 301 × 1 = 301; total = 641)
 
 ---
 
