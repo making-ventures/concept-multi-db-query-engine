@@ -382,7 +382,7 @@ This document breaks the concept into sequential implementation stages. Each sta
 
 ## Stage 14 — Final Verification
 
-**Goal:** Run all 258 test scenarios together, verify cross-stage integration, and confirm no regressions.
+**Goal:** Run all 280 test scenarios together, verify cross-stage integration, and confirm no regressions.
 
 **Package:** all
 
