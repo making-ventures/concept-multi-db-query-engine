@@ -993,6 +993,14 @@ Enum-like fields (`direction`, `fn`, `operator`, `logic`) are constrained by Typ
 | C1463 | Filter group logic injection | `POST /validate/query`: orders, `filters: [{ logic: 'and 1=1);--', conditions: [{ column: 'status', operator: '=', value: 'active' }] }]` | validation error — `logic` must be `'and'` or `'or'` |
 | C1464 | EXISTS count operator injection | `POST /validate/query`: orders, `filters: [{ table: 'users', count: { operator: ') UNION SELECT 1;--', value: 1 } }]` | validation error — `count.operator` must be one of `=`, `!=`, `>`, `<`, `>=`, `<=` |
 | C1465 | HAVING group logic injection | `POST /validate/query`: orders, `aggregations: [{ column: 'total', fn: 'sum', alias: 'x' }]`, `groupBy: ['status']`, `having: [{ logic: 'or 1=1);--', conditions: [{ column: 'x', operator: '>', value: 0 }] }]` | validation error — HAVING `logic` must be `'and'` or `'or'` |
+| C1466 | JOIN table name injection | `POST /validate/query`: orders, `joins: [{ table: 'users; DROP TABLE users' }]` | validation error — `UNKNOWN_TABLE` (join target does not exist) |
+| C1467 | ORDER BY column injection | `POST /validate/query`: orders, `orderBy: [{ column: 'id"; DROP TABLE orders;--', direction: 'asc' }]` | validation error — `INVALID_ORDER_BY` (column does not exist) |
+| C1468 | GROUP BY column injection | `POST /validate/query`: orders, `aggregations: [{ column: 'total', fn: 'sum', alias: 'x' }]`, `groupBy: [{ column: 'status"; DROP TABLE orders;--' }]` | validation error — `UNKNOWN_COLUMN` (column does not exist) |
+| C1469 | Aggregation column injection | `POST /validate/query`: orders, `aggregations: [{ column: 'total"; DROP TABLE orders;--', fn: 'sum', alias: 'x' }]` | validation error — `UNKNOWN_COLUMN` (column does not exist) |
+| C1470 | HAVING column (non-alias) injection | `POST /validate/query`: orders, `aggregations: [{ column: 'total', fn: 'sum', alias: 'x' }]`, `groupBy: ['status']`, `having: [{ column: 'x"; DROP TABLE orders;--', operator: '>', value: 0 }]` | validation error — `INVALID_HAVING` (column is not an aggregation alias) |
+| C1471 | HAVING operator injection | `POST /validate/query`: orders, `aggregations: [{ column: 'total', fn: 'sum', alias: 'x' }]`, `groupBy: ['status']`, `having: [{ column: 'x', operator: '> 0); DROP TABLE orders;--', value: 0 }]` | validation error — `INVALID_HAVING` (operator not in allowed set) |
+| C1472 | Filter value operator injection | `POST /validate/query`: orders, `filters: [{ column: 'status', operator: '= 1); DROP TABLE orders;--', value: 'active' }]` | validation error — `INVALID_FILTER` (operator not in allowed set) |
+| C1473 | Filter column name injection | `POST /validate/query`: orders, `filters: [{ column: 'status"; DROP TABLE orders;--', operator: '=', value: 'active' }]` | validation error — `UNKNOWN_COLUMN` (column does not exist) |
 
 ### 16.2 Aggregation Alias Injection (all dialects)
 
@@ -1165,7 +1173,7 @@ For implementation developers, verify the following groups pass in order:
 18. **Execution Errors** (C1260-C1263) — missing executor/cache, query failure, timeout
 19. **Provider Errors** (C1270-C1271) — metadata/role load failure
 20. **Lifecycle** (C1310-C1313) — reload metadata/roles, close
-21. **SQL Injection** (C1400-C1465) — per-dialect parameterization, identifier validation, alias escaping, enum-keyword validation
+21. **SQL Injection** (C1400-C1473) — per-dialect parameterization, identifier validation, alias escaping, enum-keyword validation
 22. **Edge Cases** (C1700-C1716) — nulls, types, strategies, freshness, distinct+count, empty groups
 
 Total: **400 unique test IDs** × parameterization = ~**626 test executions** (sections 3–9: 113 IDs × 3 dialects + C505 × 1 = 340; other sections: 286 × 1 = 286; total = 626)
